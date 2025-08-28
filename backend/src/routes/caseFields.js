@@ -27,7 +27,7 @@ router.get('/case/:caseId/values', getCaseValues);
 // Add or update case values (any authenticated user)
 router.put('/case/:caseId/values', updateCaseValues);
 
-// Delete a specific case value (any authenticated user)
+// Delete a spxecific case value (any authenticated user)
 router.delete('/case/:caseId/values/:fieldKey', deleteCaseValue);
 
 // Bulk delete case values (any authenticated user)

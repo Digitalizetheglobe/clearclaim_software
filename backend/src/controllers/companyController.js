@@ -109,7 +109,7 @@ const getCompanyValues = async (req, res) => {
 
     // Get all case fields
     const caseFields = await CaseField.findAll({
-      order: [['field_category', 'ASC'], ['field_order', 'ASC']]
+      order: [['field_category', 'ASC'], ['display_order', 'ASC']]
     });
 
     // Get existing values for this company

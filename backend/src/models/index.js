@@ -8,6 +8,7 @@ const CaseField = require('./CaseField')(sequelize);
 const CaseValue = require('./CaseValue')(sequelize);
 const Company = require('./Company')(sequelize);
 const CompanyValue = require('./CompanyValue')(sequelize);
+const Claimant = require('./Claimant')(sequelize);
 
 // User - Case associations
 User.hasMany(Case, { 
@@ -107,6 +108,33 @@ CaseField.hasMany(CompanyValue, {
   as: 'companyValues' 
 });
 
+// Company - Claimant associations
+Company.hasMany(Claimant, { 
+  foreignKey: 'company_id', 
+  as: 'claimants' 
+});
+Claimant.belongsTo(Company, { 
+  foreignKey: 'company_id' 
+});
+
+// User - Claimant associations
+User.hasMany(Claimant, { 
+  foreignKey: 'created_by', 
+  as: 'createdClaimants' 
+});
+User.hasMany(Claimant, { 
+  foreignKey: 'last_updated_by', 
+  as: 'updatedClaimants' 
+});
+Claimant.belongsTo(User, { 
+  foreignKey: 'created_by', 
+  as: 'createdByUser' 
+});
+Claimant.belongsTo(User, { 
+  foreignKey: 'last_updated_by', 
+  as: 'lastUpdatedByUser' 
+});
+
 module.exports = {
   User,
   Case,
@@ -114,5 +142,6 @@ module.exports = {
   CaseField,
   CaseValue,
   Company,
-  CompanyValue
+  CompanyValue,
+  Claimant
 };

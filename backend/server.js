@@ -17,11 +17,13 @@ const userRoutes = require('./src/routes/users');
 const caseRoutes = require('./src/routes/cases');
 const caseFieldRoutes = require('./src/routes/caseFields');
 const companyRoutes = require('./src/routes/companies');
+const claimantRoutes = require('./src/routes/claimants');
 
 app.use('/api/users', userRoutes);
 app.use('/api/cases', caseRoutes);
 app.use('/api/case-fields', caseFieldRoutes);
 app.use('/api/companies', companyRoutes);
+app.use('/api/claimants', claimantRoutes);
 
 
 
