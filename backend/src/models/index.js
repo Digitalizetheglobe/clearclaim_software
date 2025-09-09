@@ -9,6 +9,7 @@ const CaseValue = require('./CaseValue')(sequelize);
 const Company = require('./Company')(sequelize);
 const CompanyValue = require('./CompanyValue')(sequelize);
 const Claimant = require('./Claimant')(sequelize);
+const CompanyTemplate = require('./CompanyTemplate')(sequelize);
 
 // User - Case associations
 User.hasMany(Case, { 
@@ -52,6 +53,11 @@ CaseField.hasMany(CaseValue, {
   foreignKey: 'field_key', 
   sourceKey: 'field_key',
   as: 'caseValues' 
+});
+CaseValue.belongsTo(CaseField, { 
+  foreignKey: 'field_key', 
+  targetKey: 'field_key',
+  as: 'caseField' 
 });
 
 // Case - Company associations
@@ -107,6 +113,11 @@ CaseField.hasMany(CompanyValue, {
   sourceKey: 'field_key',
   as: 'companyValues' 
 });
+CompanyValue.belongsTo(CaseField, { 
+  foreignKey: 'field_key', 
+  targetKey: 'field_key',
+  as: 'caseField' 
+});
 
 // Company - Claimant associations
 Company.hasMany(Claimant, { 
@@ -115,6 +126,25 @@ Company.hasMany(Claimant, {
 });
 Claimant.belongsTo(Company, { 
   foreignKey: 'company_id' 
+});
+
+// Company - CompanyTemplate associations
+Company.hasMany(CompanyTemplate, { 
+  foreignKey: 'company_id', 
+  as: 'companyTemplates' 
+});
+CompanyTemplate.belongsTo(Company, { 
+  foreignKey: 'company_id' 
+});
+
+// User - CompanyTemplate associations
+User.hasMany(CompanyTemplate, { 
+  foreignKey: 'selected_by', 
+  as: 'selectedTemplates' 
+});
+CompanyTemplate.belongsTo(User, { 
+  foreignKey: 'selected_by', 
+  as: 'selectedByUser' 
 });
 
 // User - Claimant associations
@@ -143,5 +173,6 @@ module.exports = {
   CaseValue,
   Company,
   CompanyValue,
-  Claimant
+  Claimant,
+  CompanyTemplate
 };
