@@ -67,6 +67,68 @@ const getAllTemplates = async (req, res) => {
   }
 };
 
+// Extract template content structure for preview
+const extractTemplateStructure = async (templatePath) => {
+  try {
+    const templateFullPath = path.join(__dirname, '../../templates', templatePath);
+    const templateBuffer = await fs.readFile(templateFullPath);
+    
+    // Create a new zip file from the template
+    const zip = new PizZip(templateBuffer);
+    
+    // Extract document.xml to get the content
+    const doc = new Docxtemplater(zip, {
+      paragraphLoop: true,
+      linebreaks: true,
+      delimiters: { start: '[', end: ']' }
+    });
+    
+    // Get the raw document XML content
+    const documentXml = zip.files["word/document.xml"];
+    if (documentXml) {
+      const content = documentXml.asText();
+      
+      // Extract text content and placeholders
+      const textContent = content
+        .replace(/<[^>]*>/g, ' ') // Remove XML tags
+        .replace(/\s+/g, ' ') // Normalize whitespace
+        .trim();
+      
+      // Find all placeholders in the content
+      const placeholders = [];
+      const placeholderRegex = /\[([^\]]+)\]/g;
+      let match;
+      while ((match = placeholderRegex.exec(textContent)) !== null) {
+        if (!placeholders.includes(match[1])) {
+          placeholders.push(match[1]);
+        }
+      }
+      
+      return {
+        placeholders,
+        textContent: textContent.substring(0, 2000), // First 2000 chars for preview
+        totalContent: textContent,
+        hasContent: true
+      };
+    }
+    
+    return {
+      placeholders: [],
+      textContent: '',
+      totalContent: '',
+      hasContent: false
+    };
+  } catch (error) {
+    console.error('Error extracting template structure:', error);
+    return {
+      placeholders: [],
+      textContent: '',
+      totalContent: '',
+      hasContent: false
+    };
+  }
+};
+
 // Map case values to template placeholders
 const mapCaseValuesToTemplate = async (caseId, templatePath) => {
   try {
@@ -203,6 +265,9 @@ const mapCaseValuesToTemplate = async (caseId, templatePath) => {
       }
     });
 
+    // Extract template structure for better preview
+    const templateStructure = await extractTemplateStructure(templatePath);
+
     // Read the template file
     const templateFullPath = path.join(__dirname, '../../templates', templatePath);
     const templateContent = await fs.readFile(templateFullPath);
@@ -210,7 +275,8 @@ const mapCaseValuesToTemplate = async (caseId, templatePath) => {
     return {
       templateContent,
       valueMap,
-      mappingPreview: generateMappingPreview(valueMap, templatePath)
+      templateStructure,
+      mappingPreview: generateMappingPreview(valueMap, templatePath, templateStructure)
     };
   } catch (error) {
     console.error('Error mapping case values to template:', error);
@@ -219,14 +285,77 @@ const mapCaseValuesToTemplate = async (caseId, templatePath) => {
 };
 
 // Generate mapping preview
-const generateMappingPreview = (valueMap, templatePath) => {
+const generateMappingPreview = (valueMap, templatePath, templateStructure) => {
+  // Categorize mappings by type
+  const categorizedMappings = {
+    personal: {},
+    address: {},
+    company: {},
+    dates: {},
+    other: {}
+  };
+
+  Object.entries(valueMap).forEach(([key, value]) => {
+    const lowerKey = key.toLowerCase();
+    if (lowerKey.includes('name') || lowerKey.includes('age') || lowerKey.includes('relation')) {
+      categorizedMappings.personal[key] = value;
+    } else if (lowerKey.includes('address')) {
+      categorizedMappings.address[key] = value;
+    } else if (lowerKey.includes('company') || lowerKey.includes('folio') || lowerKey.includes('share')) {
+      categorizedMappings.company[key] = value;
+    } else if (lowerKey.includes('date')) {
+      categorizedMappings.dates[key] = value;
+    } else {
+      categorizedMappings.other[key] = value;
+    }
+  });
+
+  // Create populated preview content by replacing placeholders
+  let populatedContent = templateStructure.textContent || '';
+  Object.entries(valueMap).forEach(([key, value]) => {
+    if (value) {
+      const placeholder = `[${key}]`;
+      populatedContent = populatedContent.replace(new RegExp(placeholder.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'), value);
+    }
+  });
+
   return {
     template: templatePath,
     totalMappings: Object.keys(valueMap).length,
     mappings: valueMap,
+    categorizedMappings,
     populatedFields: Object.keys(valueMap).filter(key => valueMap[key] && valueMap[key].trim() !== '').length,
-    emptyFields: Object.keys(valueMap).filter(key => !valueMap[key] || valueMap[key].trim() === '').length
+    emptyFields: Object.keys(valueMap).filter(key => !valueMap[key] || valueMap[key].trim() === '').length,
+    templateStructure: {
+      name: templatePath.replace('_Template.docx', '').replace(/_/g, ' '),
+      category: templatePath.includes('Annexure-D') ? 'Individual Affidavit' : 
+                templatePath.includes('Form-A') ? 'Affidavit' :
+                templatePath.includes('Form-B') ? 'Indemnity' :
+                templatePath.includes('ISR-') ? 'ISR' : 'General',
+      description: getTemplateDescription(templatePath),
+      placeholders: templateStructure.placeholders || [],
+      originalContent: templateStructure.textContent || '',
+      populatedContent: populatedContent
+    }
   };
+};
+
+// Get template description based on filename
+const getTemplateDescription = (templatePath) => {
+  if (templatePath.includes('Annexure-D')) {
+    return 'Individual affidavit document for legal heir claiming process';
+  } else if (templatePath.includes('Annexure-E')) {
+    return 'Indemnity bond document for securing claims';
+  } else if (templatePath.includes('Form-A')) {
+    return 'Standard affidavit form for claim processing';
+  } else if (templatePath.includes('Form-B')) {
+    return 'Indemnity form for claim security';
+  } else if (templatePath.includes('ISR-')) {
+    return 'Investment Scheme Registry document';
+  } else if (templatePath.includes('Name Mismatch')) {
+    return 'Affidavit for name mismatch correction';
+  }
+  return 'Standard legal document template';
 };
 
 // Get template preview with case data
@@ -315,6 +444,7 @@ const downloadPopulatedTemplate = async (req, res) => {
     const doc = new Docxtemplater(zip, {
       paragraphLoop: true,
       linebreaks: true,
+      delimiters: { start: '[', end: ']' }
     });
 
     try {
