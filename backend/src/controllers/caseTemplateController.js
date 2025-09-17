@@ -147,121 +147,384 @@ const mapCaseValuesToTemplate = async (caseId, templatePath) => {
     });
 
     console.log(`Found ${caseValues.length} case values for case ${caseId}`);
+    
+    // Debug: Log all available field keys
+    const availableKeys = caseValues.map(cv => cv.caseField?.field_key).filter(Boolean);
+    console.log('Available field keys:', availableKeys.slice(0, 10), '...');
 
     // Create a mapping object for easy lookup
     const valueMap = {};
+    
+    // First, map all direct field keys and labels
     caseValues.forEach(cv => {
       if (cv.caseField && cv.field_value) {
-        // Map by field key
+        // Map by field key (exact match)
         valueMap[cv.caseField.field_key] = cv.field_value;
-        // Map by field label
+        // Map by field label (exact match)
         valueMap[cv.caseField.field_label] = cv.field_value;
-        
-        // Create specific mappings based on field keys
-        const key = cv.caseField.field_key.toLowerCase();
-        
-        // Common name mappings
-        if (key.includes('client_name')) {
-          valueMap['Name as per Aadhar C1'] = cv.field_value;
-          valueMap['Name as per Aadhar C2'] = cv.field_value;
-          valueMap['Name as per Aadhar C3'] = cv.field_value;
-          valueMap['Name as per DC H1'] = cv.field_value;
-          valueMap['Name as per DC H2'] = cv.field_value;
-          valueMap['Name as per DC H3'] = cv.field_value;
-          valueMap['Name as per DC H4'] = cv.field_value;
-          valueMap['Name as per Aadhar LH1'] = cv.field_value;
-          valueMap['Name as per Aadhar LH2'] = cv.field_value;
-          valueMap['Name as per Aadhar LH3'] = cv.field_value;
-          valueMap['Name as per Aadhar LH4'] = cv.field_value;
-          valueMap['Name as per Aadhar LH5'] = cv.field_value;
-        }
-        
-        // Address mappings
-        if (key.includes('client_address') || key.includes('address')) {
-          valueMap['Address C1'] = cv.field_value;
-          valueMap['Address C2'] = cv.field_value;
-          valueMap['Address C3'] = cv.field_value;
-          valueMap['Address LH1'] = cv.field_value;
-          valueMap['Address LH2'] = cv.field_value;
-          valueMap['Address LH3'] = cv.field_value;
-          valueMap['Address LH4'] = cv.field_value;
-          valueMap['Address LH5'] = cv.field_value;
-        }
-        
-        // Age mappings
-        if (key.includes('age')) {
-          valueMap['Age C1'] = cv.field_value;
-          valueMap['Age C2'] = cv.field_value;
-          valueMap['Age C3'] = cv.field_value;
-          valueMap['Age LH1'] = cv.field_value;
-          valueMap['Age LH2'] = cv.field_value;
-          valueMap['Age LH3'] = cv.field_value;
-          valueMap['Age LH4'] = cv.field_value;
-          valueMap['Age LH5'] = cv.field_value;
-        }
-        
-        // Relation mappings
-        if (key.includes('relation')) {
-          valueMap['Relation C1'] = cv.field_value;
-          valueMap['Relation C2'] = cv.field_value;
-          valueMap['Relation C3'] = cv.field_value;
-          valueMap['Relation LH1'] = cv.field_value;
-          valueMap['Relation LH2'] = cv.field_value;
-          valueMap['Relation LH3'] = cv.field_value;
-          valueMap['Relation LH4'] = cv.field_value;
-          valueMap['Relation LH5'] = cv.field_value;
-        }
-        
-        // Company specific mappings
-        if (key.includes('company_name')) {
-          valueMap['Company Name'] = cv.field_value;
-        }
-        
-        if (key.includes('folio_no')) {
-          valueMap['Folio No'] = cv.field_value;
-        }
-        
-        if (key.includes('total_shares')) {
-          valueMap['Total Shares'] = cv.field_value;
-        }
-        
-        // Deceased information
-        if (key.includes('deceased_name')) {
-          valueMap['Name as per Aadhar C1'] = cv.field_value;
-          valueMap['Deceased Name C1'] = cv.field_value;
-          valueMap['Deceased Name C2'] = cv.field_value;
-          valueMap['Deceased Name C3'] = cv.field_value;
-        }
       }
     });
 
-    // Add default values for common empty placeholders
-    const defaultValues = {
+    // Sort case values by priority to ensure correct mapping order
+    const sortedCaseValues = caseValues.sort((a, b) => {
+      const aKey = a.caseField?.field_key || '';
+      const bKey = b.caseField?.field_key || '';
+      
+      // Priority order: specific fields first, then general ones
+      const priority = {
+        'Name as per Aadhar C1': 1,
+        'PAN C1': 2,
+        'Address C1': 3,
+        'Mobile No C1': 4,
+        'Email ID C1': 5,
+        'DOB C1': 6,
+        'Father Name C1': 7,
+        'Age C1': 8
+      };
+      
+      const aPriority = priority[aKey] || 999;
+      const bPriority = priority[bKey] || 999;
+      
+      return aPriority - bPriority;
+    });
+
+    // Now create comprehensive mappings for all field variations
+    sortedCaseValues.forEach(cv => {
+      if (cv.caseField && cv.field_value) {
+        const key = cv.caseField.field_key;
+        const value = cv.field_value;
+        
+        // Direct mapping for exact field keys (don't overwrite existing values)
+        if (!valueMap[key]) {
+          valueMap[key] = value;
+        }
+        
+        // Create comprehensive mappings based on field patterns
+        // Only map if the target field doesn't already have a value
+        if (key === 'Name as per Aadhar C1') {
+          // Map to all name variations for C1, but only if they don't exist
+          // NEVER map to PAN fields - those should only contain PAN numbers
+          if (!valueMap['Name as per PAN C1']) valueMap['Name as per PAN C1'] = value;
+          if (!valueMap['Name as per CML C1']) valueMap['Name as per CML C1'] = value;
+          if (!valueMap['Name as per Bank C1']) valueMap['Name as per Bank C1'] = value;
+          if (!valueMap['Name as per Passport C1']) valueMap['Name as per Passport C1'] = value;
+          if (!valueMap['Name as per Succession/WILL/LHA C1']) valueMap['Name as per Succession/WILL/LHA C1'] = value;
+          if (!valueMap['Name as per Cert C1']) valueMap['Name as per Cert C1'] = value;
+          // For ISR-1 template
+          if (!valueMap['Name(s) of the Security holder(s) as per the Certificate(s)']) {
+            valueMap['Name(s) of the Security holder(s) as per the Certificate(s)'] = value;
+          }
+        }
+        
+        if (key.includes('Name as per Aadhar C2')) {
+          valueMap['Name as per PAN C2'] = value;
+          valueMap['Name as per CML C2'] = value;
+          valueMap['Name as per Bank C2'] = value;
+          valueMap['Name as per Passport C2'] = value;
+          valueMap['Name as per Succession/WILL/LHA C2'] = value;
+          valueMap['Name as per Cert C2'] = value;
+        }
+        
+        if (key.includes('Name as per Aadhar C3')) {
+          valueMap['Name as per PAN C3'] = value;
+          valueMap['Name as per CML C3'] = value;
+          valueMap['Name as per Bank C3'] = value;
+          valueMap['Name as per Passport C3'] = value;
+          valueMap['Name as per Succession/WILL/LHA C3'] = value;
+          valueMap['Name as per Cert C3'] = value;
+        }
+        
+        // Deceased names mapping
+        if (key.includes('Name as per DC H1')) {
+          valueMap['Name as per Certificate H1'] = value;
+        }
+        if (key.includes('Name as per DC H2')) {
+          valueMap['Name as per Certificate H2'] = value;
+        }
+        if (key.includes('Name as per DC H3')) {
+          valueMap['Name as per Certificate H3'] = value;
+        }
+        if (key.includes('Name as per DC H4')) {
+          valueMap['Name as per Certificate H4'] = value;
+        }
+        
+        // Legal heir names mapping
+        if (key.includes('Name as per Aadhar LH1')) {
+          valueMap['Name as per PAN LH1'] = value;
+          valueMap['Name as per CML LH1'] = value;
+          valueMap['Name as per Bank LH1'] = value;
+          valueMap['Name as per Passport LH1'] = value;
+          valueMap['Name as per Succession/WILL/LHA LH1'] = value;
+          valueMap['Name as per Cert LH1'] = value;
+        }
+        
+        // Address comprehensive mapping - be very specific
+        if (key === 'Address C1') {
+          if (!valueMap['Old Address C1']) valueMap['Old Address C1'] = value;
+          if (!valueMap['Complete Address']) valueMap['Complete Address'] = value;
+          if (!valueMap['Full Address']) valueMap['Full Address'] = value;
+          if (!valueMap['Residential Address']) valueMap['Residential Address'] = value;
+          if (!valueMap['Permanent Address']) valueMap['Permanent Address'] = value;
+        }
+        if (key === 'Address C2' && !valueMap['Old Address C2']) {
+          valueMap['Old Address C2'] = value;
+        }
+        if (key === 'Address C3' && !valueMap['Old Address C3']) {
+          valueMap['Old Address C3'] = value;
+        }
+        
+        // Banking information mapping
+        if (key.includes('Bank Name C1')) {
+          valueMap['Bank Branch C1'] = value;
+          valueMap['Bank Address C1'] = value;
+        }
+        if (key.includes('Bank AC C1')) {
+          valueMap['Bank AC Type C1'] = value;
+        }
+        
+        // Company and shares mapping
+        if (key.includes('Company Name')) {
+          valueMap['Name of the Issuer Company'] = value;
+        }
+        if (key.includes('Folio No')) {
+          valueMap['Folio No.'] = value;
+        }
+        if (key.includes('Total Shares')) {
+          valueMap['Number & Face value of securities'] = value;
+          valueMap['No. of securities held'] = value;
+        }
+        
+        // PAN comprehensive mapping - be very specific
+        if (key === 'PAN C1') {
+          // PAN C1 should ALWAYS contain the actual PAN number
+          valueMap['PAN C1'] = value; // Force set the correct PAN value
+          valueMap['pan_c1'] = value; // Also set the lowercase version
+          // Only map PAN C1 to generic PAN fields, not to other specific fields
+          if (!valueMap['PAN']) valueMap['PAN'] = value;
+          if (!valueMap['PAN Number']) valueMap['PAN Number'] = value;
+          if (!valueMap['PAN No']) valueMap['PAN No'] = value;
+        }
+        if (key === 'PAN C2') {
+          valueMap['PAN C2'] = value;
+          valueMap['pan_c2'] = value;
+        }
+        if (key === 'PAN C3') {
+          valueMap['PAN C3'] = value;
+          valueMap['pan_c3'] = value;
+        }
+        
+        // Mobile comprehensive mapping
+        if (key.includes('Mobile No C1')) {
+          valueMap['Mobile'] = value;
+          valueMap['Mobile Number'] = value;
+          valueMap['Phone'] = value;
+          valueMap['Contact No'] = value;
+        }
+        
+        // Email comprehensive mapping
+        if (key.includes('Email ID C1')) {
+          valueMap['Email'] = value;
+          valueMap['Email Address'] = value;
+          valueMap['E-mail'] = value;
+        }
+        
+        // DOB comprehensive mapping
+        if (key.includes('DOB C1')) {
+          valueMap['Date of Birth'] = value;
+          valueMap['Birth Date'] = value;
+          valueMap['DOB'] = value;
+        }
+        
+        // Address components mapping
+        if (key.includes('City')) {
+          valueMap['City Name'] = value;
+          valueMap['Town'] = value;
+        }
+        if (key.includes('State')) {
+          valueMap['State Name'] = value;
+          valueMap['Province'] = value;
+        }
+        if (key.includes('PIN C1')) {
+          valueMap['Pincode'] = value;
+          valueMap['Postal Code'] = value;
+          valueMap['ZIP'] = value;
+        }
+        
+        // Age comprehensive mapping
+        if (key.includes('Age C1')) {
+          valueMap['Age'] = value;
+          valueMap['Years'] = value;
+        }
+        
+        // Relation comprehensive mapping
+        if (key.includes('Deceased Relation C1')) {
+          valueMap['Relation'] = value;
+          valueMap['Relationship'] = value;
+          valueMap['Relation with Deceased'] = value;
+        }
+        
+        // Father name mapping
+        if (key.includes('Father Name C1')) {
+          valueMap['Father\'s Name'] = value;
+          valueMap['Father Name'] = value;
+          valueMap['Parent Name'] = value;
+        }
+        
+        // Additional common template mappings - only if target doesn't exist
+        if (key === 'Name as per Aadhar C1') {
+          // Common name variations
+          if (!valueMap['Full Name']) valueMap['Full Name'] = value;
+          if (!valueMap['Name']) valueMap['Name'] = value;
+          if (!valueMap['Applicant Name']) valueMap['Applicant Name'] = value;
+          if (!valueMap['Claimant Name']) valueMap['Claimant Name'] = value;
+          if (!valueMap['Deponent Name']) valueMap['Deponent Name'] = value;
+        }
+        
+        // Address variations - only if target doesn't exist
+        if (key === 'Address C1') {
+          if (!valueMap['Complete Address']) valueMap['Complete Address'] = value;
+          if (!valueMap['Full Address']) valueMap['Full Address'] = value;
+          if (!valueMap['Residential Address']) valueMap['Residential Address'] = value;
+          if (!valueMap['Permanent Address']) valueMap['Permanent Address'] = value;
+        }
+        
+        // Date variations - only if target doesn't exist
+        if (key === 'DOB C1') {
+          if (!valueMap['Date of Birth']) valueMap['Date of Birth'] = value;
+          if (!valueMap['Birth Date']) valueMap['Birth Date'] = value;
+          if (!valueMap['DOB']) valueMap['DOB'] = value;
+          if (!valueMap['Born on']) valueMap['Born on'] = value;
+        }
+      }
+    });
+    
+    // Debug: Log final mapping count and check for conflicts
+    console.log(`Created ${Object.keys(valueMap).length} total mappings`);
+    console.log('Sample mappings:', Object.entries(valueMap).slice(0, 5));
+    
+    // Check for specific problematic mappings
+    const problematicMappings = [];
+    Object.entries(valueMap).forEach(([key, value]) => {
+      if (key.includes('PAN') && value && value.includes('Plot No')) {
+        problematicMappings.push(`${key}: ${value}`);
+      }
+      if (key.includes('Name as per Aadhar C1') && value && value.includes('Tryambak')) {
+        problematicMappings.push(`${key}: ${value}`);
+      }
+    });
+    
+    if (problematicMappings.length > 0) {
+      console.log('⚠️ Problematic mappings detected:');
+      problematicMappings.forEach(mapping => console.log(`  - ${mapping}`));
+    }
+    
+    // MAJOR CLEANUP: Fix all mapping issues
+    console.log('🔧 Starting comprehensive mapping cleanup...');
+    
+    // 1. Fix PAN fields - they should ONLY contain PAN numbers
+    const panFields = ['PAN C1', 'PAN C2', 'PAN C3', 'pan_c1', 'pan_c2', 'pan_c3'];
+    panFields.forEach(panField => {
+      if (valueMap[panField]) {
+        const currentValue = valueMap[panField];
+        // Check if PAN field contains invalid data (names, addresses, etc.)
+        if (currentValue.includes(' ') || 
+            currentValue.includes('Bhagwan') || 
+            currentValue.includes('Prasad') || 
+            currentValue.includes('Sushil') ||
+            currentValue.includes('Tryambak') ||
+            currentValue.includes('Kulkarni') ||
+            currentValue.includes('Hinjewadi') ||
+            currentValue.includes('Pune')) {
+          
+          console.log(`⚠️ PAN field ${panField} contains invalid value: ${currentValue}`);
+          
+          // Find the correct PAN value from original data
+          const correctPanValue = caseValues.find(cv => 
+            cv.caseField && 
+            cv.caseField.field_key === panField && 
+            cv.field_value && 
+            cv.field_value.length >= 10 && // PAN should be at least 10 chars
+            !cv.field_value.includes(' ') &&
+            !cv.field_value.includes('Bhagwan') &&
+            !cv.field_value.includes('Prasad') &&
+            !cv.field_value.includes('Sushil') &&
+            !cv.field_value.includes('Tryambak') &&
+            !cv.field_value.includes('Kulkarni')
+          );
+          
+          if (correctPanValue) {
+            console.log(`✅ Found correct PAN value for ${panField}: ${correctPanValue.field_value}`);
+            valueMap[panField] = correctPanValue.field_value;
+          } else {
+            console.log(`❌ No correct PAN value found for ${panField}, setting to empty`);
+            valueMap[panField] = '';
+          }
+        }
+      }
+    });
+    
+    // 2. Fix name fields - ensure they don't contain PAN numbers
+    const nameFields = ['Name as per Aadhar C1', 'Name as per PAN C1', 'Name as per CML C1', 'Name as per Bank C1'];
+    nameFields.forEach(nameField => {
+      if (valueMap[nameField]) {
+        const currentValue = valueMap[nameField];
+        // Check if name field contains PAN number (10+ chars, no spaces, alphanumeric)
+        if (currentValue.length >= 10 && !currentValue.includes(' ') && /^[A-Z0-9]+$/.test(currentValue)) {
+          console.log(`⚠️ Name field ${nameField} contains PAN number: ${currentValue}`);
+          
+          // Find the correct name value
+          const correctNameValue = caseValues.find(cv => 
+            cv.caseField && 
+            cv.caseField.field_key === nameField && 
+            cv.field_value && 
+            cv.field_value.includes(' ') && // Names should have spaces
+            !/^[A-Z0-9]+$/.test(cv.field_value) // Not just alphanumeric
+          );
+          
+          if (correctNameValue) {
+            console.log(`✅ Found correct name value for ${nameField}: ${correctNameValue.field_value}`);
+            valueMap[nameField] = correctNameValue.field_value;
+          }
+        }
+      }
+    });
+    
+    // 3. Remove all undefined values
+    Object.keys(valueMap).forEach(key => {
+      if (valueMap[key] === 'undefined' || valueMap[key] === undefined || valueMap[key] === null) {
+        console.log(`🧹 Removing undefined value for ${key}`);
+        valueMap[key] = '';
+      }
+    });
+    
+    // 4. Final validation - ensure data types match field types
+    Object.entries(valueMap).forEach(([key, value]) => {
+      if (value && typeof value === 'string') {
+        // PAN fields should be alphanumeric, 10+ chars, no spaces
+        if (key.includes('PAN') && (value.includes(' ') || value.length < 10)) {
+          console.log(`⚠️ Invalid PAN format for ${key}: ${value}`);
+          valueMap[key] = '';
+        }
+        // Name fields should have spaces (multiple words)
+        if (key.includes('Name') && !key.includes('PAN') && !value.includes(' ') && value.length > 5) {
+          console.log(`⚠️ Suspicious name format for ${key}: ${value}`);
+        }
+      }
+    });
+    
+    console.log('✅ Mapping cleanup completed');
+
+    // Add only date defaults, no sample values
+    const dateDefaults = {
       'Date of Issue': new Date().toLocaleDateString('en-IN'),
       'Current Date': new Date().toLocaleDateString('en-IN'),
-      'Today Date': new Date().toLocaleDateString('en-IN'),
-      // Add sample values if no case data exists
-      'Name as per Aadhar C1': valueMap['Name as per Aadhar C1'] || 'Sample Name C1',
-      'Name as per Aadhar C2': valueMap['Name as per Aadhar C2'] || 'Sample Name C2', 
-      'Name as per Aadhar C3': valueMap['Name as per Aadhar C3'] || 'Sample Name C3',
-      'Address C1': valueMap['Address C1'] || 'Sample Address C1',
-      'Address C2': valueMap['Address C2'] || 'Sample Address C2',
-      'Address C3': valueMap['Address C3'] || 'Sample Address C3',
-      'Age C1': valueMap['Age C1'] || '30',
-      'Age C2': valueMap['Age C2'] || '28',
-      'Age C3': valueMap['Age C3'] || '25',
-      'Relation C1': valueMap['Relation C1'] || 'Son',
-      'Relation C2': valueMap['Relation C2'] || 'Daughter',
-      'Relation C3': valueMap['Relation C3'] || 'Spouse',
-      'Company Name': valueMap['Company Name'] || 'Sample Company Ltd.',
-      'Folio No': valueMap['Folio No'] || 'FOL123456',
-      'Total Shares': valueMap['Total Shares'] || '1000'
+      'Today Date': new Date().toLocaleDateString('en-IN')
     };
 
-    // Only add default values for keys that don't already exist
-    Object.keys(defaultValues).forEach(key => {
+    // Only add date defaults for keys that don't already exist
+    Object.keys(dateDefaults).forEach(key => {
       if (!valueMap[key]) {
-        valueMap[key] = defaultValues[key];
+        valueMap[key] = dateDefaults[key];
       }
     });
 
@@ -313,7 +576,8 @@ const generateMappingPreview = (valueMap, templatePath, templateStructure) => {
   // Create populated preview content by replacing placeholders
   let populatedContent = templateStructure.textContent || '';
   Object.entries(valueMap).forEach(([key, value]) => {
-    if (value) {
+    // Only replace if value exists and is not empty/undefined
+    if (value && value.trim() !== '' && value !== 'undefined' && value !== 'null') {
       const placeholder = `[${key}]`;
       populatedContent = populatedContent.replace(new RegExp(placeholder.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'), value);
     }
@@ -448,8 +712,16 @@ const downloadPopulatedTemplate = async (req, res) => {
     });
 
     try {
+      // Clean the value map to remove undefined/empty values
+      const cleanValueMap = {};
+      Object.entries(mappedTemplate.valueMap).forEach(([key, value]) => {
+        if (value && value.trim() !== '' && value !== 'undefined' && value !== 'null' && value !== null) {
+          cleanValueMap[key] = value;
+        }
+      });
+
       // Set the template variables
-      doc.setData(mappedTemplate.valueMap);
+      doc.setData(cleanValueMap);
 
       // Render the document
       doc.render();

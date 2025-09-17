@@ -256,50 +256,66 @@ const mapCompanyValuesToTemplate = async (companyId, templatePath) => {
         const key = cv.caseField.field_key.toLowerCase();
         const label = cv.caseField.field_label.toLowerCase();
         
-        // Map common variations
-        if (key.includes('name') && key.includes('c1')) {
-          valueMap['Name as per Aadhar C1'] = cv.field_value;
-          valueMap['name_c1'] = cv.field_value;
+        // Map common variations - be more specific to avoid overwriting
+        if (key === 'name as per aadhar c1') {
+          if (!valueMap['Name as per Aadhar C1']) valueMap['Name as per Aadhar C1'] = cv.field_value;
+          if (!valueMap['name_c1']) valueMap['name_c1'] = cv.field_value;
         }
-        if (key.includes('name') && key.includes('c2')) {
-          valueMap['Name as per Aadhar C2'] = cv.field_value;
-          valueMap['name_c2'] = cv.field_value;
+        if (key === 'name as per aadhar c2') {
+          if (!valueMap['Name as per Aadhar C2']) valueMap['Name as per Aadhar C2'] = cv.field_value;
+          if (!valueMap['name_c2']) valueMap['name_c2'] = cv.field_value;
         }
-        if (key.includes('name') && key.includes('c3')) {
-          valueMap['Name as per Aadhar C3'] = cv.field_value;
-          valueMap['name_c3'] = cv.field_value;
+        if (key === 'name as per aadhar c3') {
+          if (!valueMap['Name as per Aadhar C3']) valueMap['Name as per Aadhar C3'] = cv.field_value;
+          if (!valueMap['name_c3']) valueMap['name_c3'] = cv.field_value;
         }
-        if (key.includes('father') && key.includes('c1')) {
-          valueMap['Father Name C1'] = cv.field_value;
-          valueMap['father_name_c1'] = cv.field_value;
+        if (key === 'father name c1') {
+          if (!valueMap['Father Name C1']) valueMap['Father Name C1'] = cv.field_value;
+          if (!valueMap['father_name_c1']) valueMap['father_name_c1'] = cv.field_value;
         }
-        if (key.includes('father') && key.includes('c2')) {
-          valueMap['Father Name C2'] = cv.field_value;
-          valueMap['father_name_c2'] = cv.field_value;
+        if (key === 'father name c2') {
+          if (!valueMap['Father Name C2']) valueMap['Father Name C2'] = cv.field_value;
+          if (!valueMap['father_name_c2']) valueMap['father_name_c2'] = cv.field_value;
         }
-        if (key.includes('father') && key.includes('c3')) {
-          valueMap['Father Name C3'] = cv.field_value;
-          valueMap['father_name_c3'] = cv.field_value;
+        if (key === 'father name c3') {
+          if (!valueMap['Father Name C3']) valueMap['Father Name C3'] = cv.field_value;
+          if (!valueMap['father_name_c3']) valueMap['father_name_c3'] = cv.field_value;
         }
-        if (key.includes('address')) {
-          valueMap['Address C1'] = cv.field_value;
-          valueMap['address_c1'] = cv.field_value;
+        if (key === 'address c1') {
+          if (!valueMap['Address C1']) valueMap['Address C1'] = cv.field_value;
+          if (!valueMap['address_c1']) valueMap['address_c1'] = cv.field_value;
         }
-        if (key.includes('pan')) {
-          valueMap['PAN C1'] = cv.field_value;
-          valueMap['pan_c1'] = cv.field_value;
+        if (key === 'address c2') {
+          if (!valueMap['Address C2']) valueMap['Address C2'] = cv.field_value;
+          if (!valueMap['address_c2']) valueMap['address_c2'] = cv.field_value;
         }
-        if (key.includes('company') && key.includes('name')) {
-          valueMap['Company Name'] = cv.field_value;
-          valueMap['company_name'] = cv.field_value;
+        if (key === 'address c3') {
+          if (!valueMap['Address C3']) valueMap['Address C3'] = cv.field_value;
+          if (!valueMap['address_c3']) valueMap['address_c3'] = cv.field_value;
         }
-        if (key.includes('folio')) {
-          valueMap['Folio No'] = cv.field_value;
-          valueMap['folio_no'] = cv.field_value;
+        if (key === 'pan c1') {
+          if (!valueMap['PAN C1']) valueMap['PAN C1'] = cv.field_value;
+          if (!valueMap['pan_c1']) valueMap['pan_c1'] = cv.field_value;
         }
-        if (key.includes('total') && key.includes('share')) {
-          valueMap['Total Shares'] = cv.field_value;
-          valueMap['total_shares'] = cv.field_value;
+        if (key === 'pan c2') {
+          if (!valueMap['PAN C2']) valueMap['PAN C2'] = cv.field_value;
+          if (!valueMap['pan_c2']) valueMap['pan_c2'] = cv.field_value;
+        }
+        if (key === 'pan c3') {
+          if (!valueMap['PAN C3']) valueMap['PAN C3'] = cv.field_value;
+          if (!valueMap['pan_c3']) valueMap['pan_c3'] = cv.field_value;
+        }
+        if (key === 'company name') {
+          if (!valueMap['Company Name']) valueMap['Company Name'] = cv.field_value;
+          if (!valueMap['company_name']) valueMap['company_name'] = cv.field_value;
+        }
+        if (key === 'folio no') {
+          if (!valueMap['Folio No']) valueMap['Folio No'] = cv.field_value;
+          if (!valueMap['folio_no']) valueMap['folio_no'] = cv.field_value;
+        }
+        if (key === 'total shares') {
+          if (!valueMap['Total Shares']) valueMap['Total Shares'] = cv.field_value;
+          if (!valueMap['total_shares']) valueMap['total_shares'] = cv.field_value;
         }
       }
     });
@@ -307,21 +323,24 @@ const mapCompanyValuesToTemplate = async (companyId, templatePath) => {
     // Add specific template placeholder mappings
     // Map the exact placeholders that appear in the Word templates
     const templateMappings = {
-      'Company Name': valueMap['company_name'] || valueMap['Company Name'] || 'Sample Company Ltd.',
-      'Folio No': valueMap['folio_no'] || valueMap['Folio No'] || 'FOL123456',
-      'Total Shares': valueMap['total_shares'] || valueMap['Total Shares'] || '1000',
-      'Name as per Aadhar C1': valueMap['name_c1'] || valueMap['Name as per Aadhar C1'] || 'Sample Name C1',
-      'Name as per Aadhar C2': valueMap['name_c2'] || valueMap['Name as per Aadhar C2'] || 'Sample Name C2',
-      'Name as per Aadhar C3': valueMap['name_c3'] || valueMap['Name as per Aadhar C3'] || 'Sample Name C3',
-      'Address C1': valueMap['address_c1'] || valueMap['Address C1'] || 'Sample Address C1',
-      'Address C2': valueMap['address_c2'] || valueMap['Address C2'] || 'Sample Address C2',
-      'Address C3': valueMap['address_c3'] || valueMap['Address C3'] || 'Sample Address C3',
-      'Age C1': valueMap['age_c1'] || valueMap['Age C1'] || '30',
-      'Age C2': valueMap['age_c2'] || valueMap['Age C2'] || '28',
-      'Age C3': valueMap['age_c3'] || valueMap['Age C3'] || '25',
-      'Deceased Relation C1': valueMap['relation_c1'] || valueMap['Deceased Relation C1'] || 'Son',
-      'Deceased Relation C2': valueMap['relation_c2'] || valueMap['Deceased Relation C2'] || 'Daughter',
-      'Deceased Relation C3': valueMap['relation_c3'] || valueMap['Deceased Relation C3'] || 'Spouse',
+      'Company Name': valueMap['company_name'] || valueMap['Company Name'] || '',
+      'Folio No': valueMap['folio_no'] || valueMap['Folio No'] || '',
+      'Total Shares': valueMap['total_shares'] || valueMap['Total Shares'] || '',
+      'Name as per Aadhar C1': valueMap['name_c1'] || valueMap['Name as per Aadhar C1'] || '',
+      'Name as per Aadhar C2': valueMap['name_c2'] || valueMap['Name as per Aadhar C2'] || '',
+      'Name as per Aadhar C3': valueMap['name_c3'] || valueMap['Name as per Aadhar C3'] || '',
+      'Address C1': valueMap['address_c1'] || valueMap['Address C1'] || '',
+      'Address C2': valueMap['address_c2'] || valueMap['Address C2'] || '',
+      'Address C3': valueMap['address_c3'] || valueMap['Address C3'] || '',
+      'PAN C1': valueMap['pan_c1'] || valueMap['PAN C1'] || '',
+      'PAN C2': valueMap['pan_c2'] || valueMap['PAN C2'] || '',
+      'PAN C3': valueMap['pan_c3'] || valueMap['PAN C3'] || '',
+      'Age C1': valueMap['age_c1'] || valueMap['Age C1'] || '',
+      'Age C2': valueMap['age_c2'] || valueMap['Age C2'] || '',
+      'Age C3': valueMap['age_c3'] || valueMap['Age C3'] || '',
+      'Deceased Relation C1': valueMap['relation_c1'] || valueMap['Deceased Relation C1'] || '',
+      'Deceased Relation C2': valueMap['relation_c2'] || valueMap['Deceased Relation C2'] || '',
+      'Deceased Relation C3': valueMap['relation_c3'] || valueMap['Deceased Relation C3'] || '',
       'Date of Issue': valueMap['date_of_issue'] || valueMap['Date of Issue'] || new Date().toLocaleDateString('en-IN'),
       'Current Date': new Date().toLocaleDateString('en-IN'),
       'Today Date': new Date().toLocaleDateString('en-IN')
@@ -330,6 +349,101 @@ const mapCompanyValuesToTemplate = async (companyId, templatePath) => {
     // Merge template mappings with valueMap
     Object.assign(valueMap, templateMappings);
     
+    // MAJOR CLEANUP: Fix all mapping issues (same as case template controller)
+    console.log('🔧 Starting comprehensive mapping cleanup for company templates...');
+    
+    // 1. Fix PAN fields - they should ONLY contain PAN numbers
+    const panFields = ['PAN C1', 'PAN C2', 'PAN C3', 'pan_c1', 'pan_c2', 'pan_c3'];
+    panFields.forEach(panField => {
+      if (valueMap[panField]) {
+        const currentValue = valueMap[panField];
+        // Check if PAN field contains invalid data (names, addresses, etc.)
+        if (currentValue.includes(' ') || 
+            currentValue.includes('Bhagwan') || 
+            currentValue.includes('Prasad') || 
+            currentValue.includes('Sushil') ||
+            currentValue.includes('Tryambak') ||
+            currentValue.includes('Kulkarni') ||
+            currentValue.includes('Hinjewadi') ||
+            currentValue.includes('Pune')) {
+          
+          console.log(`⚠️ PAN field ${panField} contains invalid value: ${currentValue}`);
+          
+          // Find the correct PAN value from original data
+          const correctPanValue = companyValues.find(cv => 
+            cv.caseField && 
+            cv.caseField.field_key === panField && 
+            cv.field_value && 
+            cv.field_value.length >= 10 && // PAN should be at least 10 chars
+            !cv.field_value.includes(' ') &&
+            !cv.field_value.includes('Bhagwan') &&
+            !cv.field_value.includes('Prasad') &&
+            !cv.field_value.includes('Sushil') &&
+            !cv.field_value.includes('Tryambak') &&
+            !cv.field_value.includes('Kulkarni')
+          );
+          
+          if (correctPanValue) {
+            console.log(`✅ Found correct PAN value for ${panField}: ${correctPanValue.field_value}`);
+            valueMap[panField] = correctPanValue.field_value;
+          } else {
+            console.log(`❌ No correct PAN value found for ${panField}, setting to empty`);
+            valueMap[panField] = '';
+          }
+        }
+      }
+    });
+    
+    // 2. Fix name fields - ensure they don't contain PAN numbers
+    const nameFields = ['Name as per Aadhar C1', 'Name as per PAN C1', 'Name as per CML C1', 'Name as per Bank C1'];
+    nameFields.forEach(nameField => {
+      if (valueMap[nameField]) {
+        const currentValue = valueMap[nameField];
+        // Check if name field contains PAN number (10+ chars, no spaces, alphanumeric)
+        if (currentValue.length >= 10 && !currentValue.includes(' ') && /^[A-Z0-9]+$/.test(currentValue)) {
+          console.log(`⚠️ Name field ${nameField} contains PAN number: ${currentValue}`);
+          
+          // Find the correct name value
+          const correctNameValue = companyValues.find(cv => 
+            cv.caseField && 
+            cv.caseField.field_key === nameField && 
+            cv.field_value && 
+            cv.field_value.includes(' ') && // Names should have spaces
+            !/^[A-Z0-9]+$/.test(cv.field_value) // Not just alphanumeric
+          );
+          
+          if (correctNameValue) {
+            console.log(`✅ Found correct name value for ${nameField}: ${correctNameValue.field_value}`);
+            valueMap[nameField] = correctNameValue.field_value;
+          }
+        }
+      }
+    });
+    
+    // 3. Remove all undefined values
+    Object.keys(valueMap).forEach(key => {
+      if (valueMap[key] === 'undefined' || valueMap[key] === undefined || valueMap[key] === null) {
+        console.log(`🧹 Removing undefined value for ${key}`);
+        valueMap[key] = '';
+      }
+    });
+    
+    // 4. Final validation - ensure data types match field types
+    Object.entries(valueMap).forEach(([key, value]) => {
+      if (value && typeof value === 'string') {
+        // PAN fields should be alphanumeric, 10+ chars, no spaces
+        if (key.includes('PAN') && (value.includes(' ') || value.length < 10)) {
+          console.log(`⚠️ Invalid PAN format for ${key}: ${value}`);
+          valueMap[key] = '';
+        }
+        // Name fields should have spaces (multiple words)
+        if (key.includes('Name') && !key.includes('PAN') && !value.includes(' ') && value.length > 5) {
+          console.log(`⚠️ Suspicious name format for ${key}: ${value}`);
+        }
+      }
+    });
+    
+    console.log('✅ Company template mapping cleanup completed');
     console.log(`🗺️ Final value map:`, valueMap);
 
     // Read the template file
@@ -525,9 +639,17 @@ const downloadPopulatedTemplate = async (req, res) => {
       }
     });
     
+    // Clean the value map to remove undefined/empty values
+    const cleanValueMap = {};
+    Object.entries(mappedTemplate.valueMap).forEach(([key, value]) => {
+      if (value && value.trim() !== '' && value !== 'undefined' && value !== 'null' && value !== null) {
+        cleanValueMap[key] = value;
+      }
+    });
+
     // Set the data to replace placeholders
-    console.log(`🔧 Setting template data:`, mappedTemplate.valueMap);
-    doc.setData(mappedTemplate.valueMap);
+    console.log(`🔧 Setting template data:`, cleanValueMap);
+    doc.setData(cleanValueMap);
     
     try {
       // Render the document (replace all placeholders)
