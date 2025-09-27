@@ -22,4 +22,16 @@ router.get('/:companyId/download/:templateId/populated', devAuth, companyTemplat
 // Get template statistics for a company
 router.get('/:companyId/stats', devAuth, companyTemplateController.getTemplateStats);
 
+// Get selected templates for a company (admin review)
+router.get('/:companyId/selected', devAuth, companyTemplateController.getSelectedTemplates);
+
+// Update admin comment for a template
+router.patch('/:templateId/comment', devAuth, companyTemplateController.updateTemplateComment);
+
+// Update employee response for a template
+router.patch('/:templateId/employee-response', devAuth, companyTemplateController.updateEmployeeResponse);
+
+// Get template preview for admin review
+router.get('/:companyId/template-preview/:templateId', devAuth, companyTemplateController.getTemplatePreview);
+
 module.exports = router;

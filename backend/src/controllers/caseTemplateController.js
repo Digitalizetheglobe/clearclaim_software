@@ -157,11 +157,17 @@ const mapCaseValuesToTemplate = async (caseId, templatePath) => {
     
     // First, map all direct field keys and labels
     caseValues.forEach(cv => {
-      if (cv.caseField && cv.field_value) {
+      if (cv.caseField) {
+        const fieldValue = cv.field_value || ''; // Ensure never undefined
         // Map by field key (exact match)
-        valueMap[cv.caseField.field_key] = cv.field_value;
-        // Map by field label (exact match)
-        valueMap[cv.caseField.field_label] = cv.field_value;
+        valueMap[cv.caseField.field_key] = fieldValue;
+        // Map by field label (exact match)  
+        valueMap[cv.caseField.field_label] = fieldValue;
+        
+        // Debug logging for undefined values
+        if (cv.field_value === undefined || cv.field_value === null) {
+          console.log(`⚠️ Found undefined/null field value for ${cv.caseField.field_key}, setting to empty string`);
+        }
       }
     });
 
@@ -190,9 +196,9 @@ const mapCaseValuesToTemplate = async (caseId, templatePath) => {
 
     // Now create comprehensive mappings for all field variations
     sortedCaseValues.forEach(cv => {
-      if (cv.caseField && cv.field_value) {
+      if (cv.caseField) {
         const key = cv.caseField.field_key;
-        const value = cv.field_value;
+        const value = cv.field_value || ''; // Ensure never undefined
         
         // Direct mapping for exact field keys (don't overwrite existing values)
         if (!valueMap[key]) {
@@ -200,8 +206,8 @@ const mapCaseValuesToTemplate = async (caseId, templatePath) => {
         }
         
         // Create comprehensive mappings based on field patterns
-        // Only map if the target field doesn't already have a value
-        if (key === 'Name as per Aadhar C1') {
+        // Only map if the target field doesn't already have a value and we have a valid value
+        if (key === 'Name as per Aadhar C1' && value && value.trim() !== '') {
           // Map to all name variations for C1, but only if they don't exist
           // NEVER map to PAN fields - those should only contain PAN numbers
           if (!valueMap['Name as per PAN C1']) valueMap['Name as per PAN C1'] = value;
@@ -216,22 +222,22 @@ const mapCaseValuesToTemplate = async (caseId, templatePath) => {
           }
         }
         
-        if (key.includes('Name as per Aadhar C2')) {
-          valueMap['Name as per PAN C2'] = value;
-          valueMap['Name as per CML C2'] = value;
-          valueMap['Name as per Bank C2'] = value;
-          valueMap['Name as per Passport C2'] = value;
-          valueMap['Name as per Succession/WILL/LHA C2'] = value;
-          valueMap['Name as per Cert C2'] = value;
+        if (key.includes('Name as per Aadhar C2') && value && value.trim() !== '') {
+          if (!valueMap['Name as per PAN C2']) valueMap['Name as per PAN C2'] = value;
+          if (!valueMap['Name as per CML C2']) valueMap['Name as per CML C2'] = value;
+          if (!valueMap['Name as per Bank C2']) valueMap['Name as per Bank C2'] = value;
+          if (!valueMap['Name as per Passport C2']) valueMap['Name as per Passport C2'] = value;
+          if (!valueMap['Name as per Succession/WILL/LHA C2']) valueMap['Name as per Succession/WILL/LHA C2'] = value;
+          if (!valueMap['Name as per Cert C2']) valueMap['Name as per Cert C2'] = value;
         }
         
-        if (key.includes('Name as per Aadhar C3')) {
-          valueMap['Name as per PAN C3'] = value;
-          valueMap['Name as per CML C3'] = value;
-          valueMap['Name as per Bank C3'] = value;
-          valueMap['Name as per Passport C3'] = value;
-          valueMap['Name as per Succession/WILL/LHA C3'] = value;
-          valueMap['Name as per Cert C3'] = value;
+        if (key.includes('Name as per Aadhar C3') && value && value.trim() !== '') {
+          if (!valueMap['Name as per PAN C3']) valueMap['Name as per PAN C3'] = value;
+          if (!valueMap['Name as per CML C3']) valueMap['Name as per CML C3'] = value;
+          if (!valueMap['Name as per Bank C3']) valueMap['Name as per Bank C3'] = value;
+          if (!valueMap['Name as per Passport C3']) valueMap['Name as per Passport C3'] = value;
+          if (!valueMap['Name as per Succession/WILL/LHA C3']) valueMap['Name as per Succession/WILL/LHA C3'] = value;
+          if (!valueMap['Name as per Cert C3']) valueMap['Name as per Cert C3'] = value;
         }
         
         // Deceased names mapping
@@ -489,10 +495,15 @@ const mapCaseValuesToTemplate = async (caseId, templatePath) => {
       }
     });
     
-    // 3. Remove all undefined values
+    // 3. Clean all undefined/null/empty values
     Object.keys(valueMap).forEach(key => {
-      if (valueMap[key] === 'undefined' || valueMap[key] === undefined || valueMap[key] === null) {
-        console.log(`🧹 Removing undefined value for ${key}`);
+      if (!valueMap[key] || 
+          valueMap[key] === 'undefined' || 
+          valueMap[key] === 'null' || 
+          valueMap[key] === undefined || 
+          valueMap[key] === null ||
+          (typeof valueMap[key] === 'string' && valueMap[key].trim() === '')) {
+        console.log(`🧹 Cleaning undefined/empty value for ${key}`);
         valueMap[key] = '';
       }
     });
@@ -530,6 +541,28 @@ const mapCaseValuesToTemplate = async (caseId, templatePath) => {
 
     // Extract template structure for better preview
     const templateStructure = await extractTemplateStructure(templatePath);
+
+    // CRITICAL FIX: Initialize ALL template placeholders with empty strings
+    // This prevents "undefined" from appearing in the final document
+    if (templateStructure.placeholders && templateStructure.placeholders.length > 0) {
+      console.log(`🔧 Initializing ${templateStructure.placeholders.length} template placeholders...`);
+      templateStructure.placeholders.forEach(placeholder => {
+        if (!valueMap.hasOwnProperty(placeholder)) {
+          valueMap[placeholder] = ''; // Initialize with empty string, not undefined
+          console.log(`📝 Initialized placeholder [${placeholder}] with empty string`);
+        }
+      });
+    }
+
+    // Final cleanup: Ensure no undefined values exist
+    Object.keys(valueMap).forEach(key => {
+      if (valueMap[key] === undefined || valueMap[key] === null || valueMap[key] === 'undefined' || valueMap[key] === 'null') {
+        console.log(`🧹 Final cleanup: Setting ${key} to empty string`);
+        valueMap[key] = '';
+      }
+    });
+
+    console.log(`✅ Final valueMap has ${Object.keys(valueMap).length} entries, all undefined values cleaned`);
 
     // Read the template file
     const templateFullPath = path.join(__dirname, '../../templates', templatePath);
@@ -576,11 +609,18 @@ const generateMappingPreview = (valueMap, templatePath, templateStructure) => {
   // Create populated preview content by replacing placeholders
   let populatedContent = templateStructure.textContent || '';
   Object.entries(valueMap).forEach(([key, value]) => {
-    // Only replace if value exists and is not empty/undefined
-    if (value && value.trim() !== '' && value !== 'undefined' && value !== 'null') {
-      const placeholder = `[${key}]`;
-      populatedContent = populatedContent.replace(new RegExp(placeholder.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'), value);
+    const placeholder = `[${key}]`;
+    // Always replace placeholder, but use empty string for undefined/null values
+    let cleanValue = '';
+    if (value && 
+        value !== 'undefined' && 
+        value !== 'null' && 
+        value !== null && 
+        value !== undefined &&
+        (typeof value === 'string' && value.trim() !== '')) {
+      cleanValue = value;
     }
+    populatedContent = populatedContent.replace(new RegExp(placeholder.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'), cleanValue);
   });
 
   return {
@@ -712,22 +752,87 @@ const downloadPopulatedTemplate = async (req, res) => {
     });
 
     try {
-      // Clean the value map to remove undefined/empty values
+      // Clean the value map to handle undefined/empty values properly
       const cleanValueMap = {};
+      let undefinedCount = 0;
+      let cleanCount = 0;
+      
       Object.entries(mappedTemplate.valueMap).forEach(([key, value]) => {
-        if (value && value.trim() !== '' && value !== 'undefined' && value !== 'null' && value !== null) {
+        // If value is undefined, null, 'undefined', 'null', or empty, set to empty string
+        if (!value || 
+            value === 'undefined' || 
+            value === 'null' || 
+            value === null || 
+            value === undefined ||
+            (typeof value === 'string' && value.trim() === '')) {
+          cleanValueMap[key] = '';
+          undefinedCount++;
+          if (value === 'undefined' || value === undefined) {
+            console.log(`🧹 Cleaned undefined value for key: ${key}`);
+          }
+        } else {
           cleanValueMap[key] = value;
+          cleanCount++;
         }
       });
 
-      // Set the template variables
-      doc.setData(cleanValueMap);
+      console.log(`🔧 Template data summary: ${cleanCount} valid values, ${undefinedCount} empty/undefined values cleaned`);
+      console.log(`🔧 Setting template data with ${Object.keys(cleanValueMap).length} total fields`);
+
+      // CRITICAL: Final aggressive cleanup to prevent ANY undefined values
+      const finalCleanMap = {};
+      Object.keys(cleanValueMap).forEach(key => {
+        const value = cleanValueMap[key];
+        if (value === undefined || value === null || value === 'undefined' || value === 'null' || !value) {
+          finalCleanMap[key] = ''; // Force empty string
+          console.log(`🚨 FINAL CLEANUP: Forced ${key} to empty string (was: ${value})`);
+        } else {
+          finalCleanMap[key] = String(value); // Ensure it's a string
+        }
+      });
+
+      console.log(`🔧 Final template data prepared with ${Object.keys(finalCleanMap).length} fields`);
+      console.log(`🔧 Sample final data:`, Object.entries(finalCleanMap).slice(0, 3));
+
+      // Set the template variables with the final clean map
+      doc.setData(finalCleanMap);
 
       // Render the document
       doc.render();
 
-      // Generate the populated document
-      const buffer = doc.getZip().generate({ type: 'nodebuffer' });
+      // Generate the populated document buffer
+      let buffer = doc.getZip().generate({ type: 'nodebuffer' });
+
+      // LAST RESORT: Check if the generated document still contains "undefined" text
+      // This is a post-processing step to catch any remaining undefined values
+      try {
+        const zip = new PizZip(buffer);
+        const documentXml = zip.files["word/document.xml"];
+        
+        if (documentXml) {
+          let content = documentXml.asText();
+          const originalContent = content;
+          
+          // Replace any remaining "undefined" text with empty string
+          content = content.replace(/undefined/g, '');
+          
+          if (content !== originalContent) {
+            console.log('🚨 POST-PROCESSING: Found and removed "undefined" text from generated document');
+            
+            // Update the document.xml content
+            zip.file("word/document.xml", content);
+            
+            // Regenerate the buffer with cleaned content
+            buffer = zip.generate({ type: 'nodebuffer' });
+            console.log('✅ Document post-processed and cleaned');
+          } else {
+            console.log('✅ No "undefined" text found in generated document');
+          }
+        }
+      } catch (postProcessError) {
+        console.error('Warning: Post-processing failed, using original buffer:', postProcessError.message);
+        // Continue with original buffer if post-processing fails
+      }
 
       // Set response headers for file download
       const filename = templateName.replace('_Template.docx', '_Populated.docx');

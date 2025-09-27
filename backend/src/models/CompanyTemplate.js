@@ -9,7 +9,9 @@ const CompanyTemplate = (sequelize) => {
     template_path: { type: DataTypes.STRING, allowNull: false },
     is_selected: { type: DataTypes.BOOLEAN, defaultValue: true },
     selected_by: { type: DataTypes.INTEGER, allowNull: true, references: { model: 'users', key: 'id' } },
-    selected_at: { type: DataTypes.DATE, defaultValue: DataTypes.NOW }
+    selected_at: { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
+    admin_comment: { type: DataTypes.TEXT, allowNull: true },
+    employee_response: { type: DataTypes.TEXT, allowNull: true }
   }, {
     tableName: 'company_templates',
     timestamps: true

@@ -11,6 +11,8 @@ const {
   deleteCompany
 } = require('../controllers/companyController');
 
+const { deleteCase } = require('../controllers/caseController');
+
 // Apply authentication middleware to all routes
 router.use(auth);
 
@@ -34,5 +36,8 @@ router.patch('/:companyId/status', updateCompanyStatus);
 
 // Delete company
 router.delete('/:companyId', deleteCompany);
+
+// Delete case (from companies context)
+router.delete('/case/:caseId', deleteCase);
 
 module.exports = router;

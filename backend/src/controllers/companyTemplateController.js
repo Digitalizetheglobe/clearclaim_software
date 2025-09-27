@@ -1,8 +1,64 @@
 const models = require('../models');
+const { sequelize } = require('../config/database');
 const path = require('path');
 const fs = require('fs').promises;
 const Docxtemplater = require('docxtemplater');
 const PizZip = require('pizzip');
+
+// Utility function to clean undefined values from any object
+const cleanUndefinedValues = (obj) => {
+  const cleaned = {};
+  Object.keys(obj).forEach(key => {
+    const value = obj[key];
+    if (value === undefined || 
+        value === null || 
+        value === 'undefined' || 
+        value === 'null' || 
+        value === 'UNDEFINED' || 
+        value === 'NULL' ||
+        (typeof value === 'string' && value.trim() === '')) {
+      // Add helpful placeholder text based on field type
+      cleaned[key] = getPlaceholderText(key);
+    } else if (typeof value === 'string') {
+      // Clean any string values that contain "undefined" text
+      const cleanedValue = value.replace(/undefined|UNDEFINED|null|NULL/gi, '').trim();
+      if (cleanedValue === '') {
+        cleaned[key] = getPlaceholderText(key);
+      } else {
+        cleaned[key] = cleanedValue;
+      }
+    } else {
+      cleaned[key] = value;
+    }
+  });
+  return cleaned;
+};
+
+// Helper function to get appropriate placeholder text for different field types
+const getPlaceholderText = (key) => {
+  // Return underlines with normal formatting to avoid red color
+  return '_________________';
+};
+
+// Helper function to get value or appropriate placeholder
+const getValueOrPlaceholder = (value, fieldName) => {
+  if (!value || 
+      value === 'undefined' || 
+      value === 'null' || 
+      value === 'UNDEFINED' || 
+      value === 'NULL' ||
+      (typeof value === 'string' && value.trim() === '')) {
+    return getPlaceholderText(fieldName);
+  }
+  
+  // Clean the value of any undefined text
+  const cleanedValue = value.toString().replace(/undefined|UNDEFINED|null|NULL/gi, '').trim();
+  if (cleanedValue === '') {
+    return getPlaceholderText(fieldName);
+  }
+  
+  return cleanedValue;
+};
 
 const CompanyTemplate = models.CompanyTemplate;
 const Company = models.Company;
@@ -320,34 +376,72 @@ const mapCompanyValuesToTemplate = async (companyId, templatePath) => {
       }
     });
 
-    // Add specific template placeholder mappings
+    // Add specific template placeholder mappings with helpful placeholders
     // Map the exact placeholders that appear in the Word templates
     const templateMappings = {
-      'Company Name': valueMap['company_name'] || valueMap['Company Name'] || '',
-      'Folio No': valueMap['folio_no'] || valueMap['Folio No'] || '',
-      'Total Shares': valueMap['total_shares'] || valueMap['Total Shares'] || '',
-      'Name as per Aadhar C1': valueMap['name_c1'] || valueMap['Name as per Aadhar C1'] || '',
-      'Name as per Aadhar C2': valueMap['name_c2'] || valueMap['Name as per Aadhar C2'] || '',
-      'Name as per Aadhar C3': valueMap['name_c3'] || valueMap['Name as per Aadhar C3'] || '',
-      'Address C1': valueMap['address_c1'] || valueMap['Address C1'] || '',
-      'Address C2': valueMap['address_c2'] || valueMap['Address C2'] || '',
-      'Address C3': valueMap['address_c3'] || valueMap['Address C3'] || '',
-      'PAN C1': valueMap['pan_c1'] || valueMap['PAN C1'] || '',
-      'PAN C2': valueMap['pan_c2'] || valueMap['PAN C2'] || '',
-      'PAN C3': valueMap['pan_c3'] || valueMap['PAN C3'] || '',
-      'Age C1': valueMap['age_c1'] || valueMap['Age C1'] || '',
-      'Age C2': valueMap['age_c2'] || valueMap['Age C2'] || '',
-      'Age C3': valueMap['age_c3'] || valueMap['Age C3'] || '',
-      'Deceased Relation C1': valueMap['relation_c1'] || valueMap['Deceased Relation C1'] || '',
-      'Deceased Relation C2': valueMap['relation_c2'] || valueMap['Deceased Relation C2'] || '',
-      'Deceased Relation C3': valueMap['relation_c3'] || valueMap['Deceased Relation C3'] || '',
-      'Date of Issue': valueMap['date_of_issue'] || valueMap['Date of Issue'] || new Date().toLocaleDateString('en-IN'),
+      'Company Name': getValueOrPlaceholder(valueMap['company_name'] || valueMap['Company Name'], 'Company Name'),
+      'Folio No': getValueOrPlaceholder(valueMap['folio_no'] || valueMap['Folio No'], 'Folio No'),
+      'Total Shares': getValueOrPlaceholder(valueMap['total_shares'] || valueMap['Total Shares'], 'Total Shares'),
+      'Name as per Aadhar C1': getValueOrPlaceholder(valueMap['name_c1'] || valueMap['Name as per Aadhar C1'], 'Name as per Aadhar C1'),
+      'Name as per Aadhar C2': getValueOrPlaceholder(valueMap['name_c2'] || valueMap['Name as per Aadhar C2'], 'Name as per Aadhar C2'),
+      'Name as per Aadhar C3': getValueOrPlaceholder(valueMap['name_c3'] || valueMap['Name as per Aadhar C3'], 'Name as per Aadhar C3'),
+      'Address C1': getValueOrPlaceholder(valueMap['address_c1'] || valueMap['Address C1'], 'Address C1'),
+      'Address C2': getValueOrPlaceholder(valueMap['address_c2'] || valueMap['Address C2'], 'Address C2'),
+      'Address C3': getValueOrPlaceholder(valueMap['address_c3'] || valueMap['Address C3'], 'Address C3'),
+      'PAN C1': getValueOrPlaceholder(valueMap['pan_c1'] || valueMap['PAN C1'], 'PAN C1'),
+      'PAN C2': getValueOrPlaceholder(valueMap['pan_c2'] || valueMap['PAN C2'], 'PAN C2'),
+      'PAN C3': getValueOrPlaceholder(valueMap['pan_c3'] || valueMap['PAN C3'], 'PAN C3'),
+      'Age C1': getValueOrPlaceholder(valueMap['age_c1'] || valueMap['Age C1'], 'Age C1'),
+      'Age C2': getValueOrPlaceholder(valueMap['age_c2'] || valueMap['Age C2'], 'Age C2'),
+      'Age C3': getValueOrPlaceholder(valueMap['age_c3'] || valueMap['Age C3'], 'Age C3'),
+      'Deceased Relation C1': getValueOrPlaceholder(valueMap['relation_c1'] || valueMap['Deceased Relation C1'], 'Deceased Relation C1'),
+      'Deceased Relation C2': getValueOrPlaceholder(valueMap['relation_c2'] || valueMap['Deceased Relation C2'], 'Deceased Relation C2'),
+      'Deceased Relation C3': getValueOrPlaceholder(valueMap['relation_c3'] || valueMap['Deceased Relation C3'], 'Deceased Relation C3'),
+      'Date of Issue': getValueOrPlaceholder(valueMap['date_of_issue'] || valueMap['Date of Issue'] || new Date().toLocaleDateString('en-IN'), 'Date of Issue'),
       'Current Date': new Date().toLocaleDateString('en-IN'),
       'Today Date': new Date().toLocaleDateString('en-IN')
     };
 
     // Merge template mappings with valueMap
     Object.assign(valueMap, templateMappings);
+    
+    // COMPREHENSIVE UNDEFINED CLEANUP: Remove all undefined/null values
+    console.log('🔧 Starting comprehensive undefined cleanup for company templates...');
+    
+    // 1. Clean all undefined/null/empty values from valueMap using utility function
+    const originalCount = Object.keys(valueMap).length;
+    const cleanedValueMap = cleanUndefinedValues(valueMap);
+    Object.assign(valueMap, cleanedValueMap);
+    console.log(`🧹 Cleaned ${originalCount} values, ${Object.keys(valueMap).length} remain`);
+    
+    // 2. Initialize ALL template placeholders with empty strings to prevent undefined
+    console.log('🔧 Initializing all template placeholders with empty strings...');
+    const commonPlaceholders = [
+      'Company Name', 'Folio No', 'Total Shares',
+      'Name as per Aadhar C1', 'Name as per Aadhar C2', 'Name as per Aadhar C3',
+      'Address C1', 'Address C2', 'Address C3',
+      'PAN C1', 'PAN C2', 'PAN C3',
+      'Age C1', 'Age C2', 'Age C3',
+      'Deceased Relation C1', 'Deceased Relation C2', 'Deceased Relation C3',
+      'Father Name C1', 'Father Name C2', 'Father Name C3',
+      'Mobile No C1', 'Mobile No C2', 'Mobile No C3',
+      'Email ID C1', 'Email ID C2', 'Email ID C3',
+      'DOB C1', 'DOB C2', 'DOB C3',
+      'Date of Issue', 'Current Date', 'Today Date'
+    ];
+    
+    commonPlaceholders.forEach(placeholder => {
+      if (!valueMap.hasOwnProperty(placeholder)) {
+        valueMap[placeholder] = getPlaceholderText(placeholder);
+        console.log(`📝 Initialized placeholder [${placeholder}] with placeholder text`);
+      }
+    });
+    
+    // 3. Final validation - ensure no undefined values exist using utility function
+    const finalCleanedValueMap = cleanUndefinedValues(valueMap);
+    Object.assign(valueMap, finalCleanedValueMap);
+    
+    console.log(`✅ Company template undefined cleanup completed. Final valueMap has ${Object.keys(valueMap).length} entries`);
     
     // MAJOR CLEANUP: Fix all mapping issues (same as case template controller)
     console.log('🔧 Starting comprehensive mapping cleanup for company templates...');
@@ -553,20 +647,39 @@ const downloadTemplate = async (req, res) => {
       });
     }
 
-    // Map company values to template
-    const mappedTemplate = await mapCompanyValuesToTemplate(companyId, template.template_path);
+    // Read the original template file
+    const templatePath = path.join(__dirname, '../../templates', template.template_path);
     
-    // For now, we'll return the template with mapping information
-    // In production, you'd generate the actual populated .docx file
-    const filename = template.template_path.split('/').pop().replace('_Template.docx', '_Populated.docx');
+    // Check if template file exists
+    try {
+      await fs.access(templatePath);
+    } catch (error) {
+      console.error(`Template file not found: ${templatePath}`);
+      return res.status(404).json({
+        success: false,
+        message: 'Template file not found'
+      });
+    }
     
-    res.json({
-      success: true,
-      message: 'Template ready for download with mapped values',
-      filename: filename,
-      mappingPreview: mappedTemplate.mappingPreview,
-      downloadUrl: `/api/company-templates/${companyId}/download/${templateId}/populated`
-    });
+    const templateBuffer = await fs.readFile(templatePath);
+    
+    // Validate that it's a valid .docx file (should start with PK signature)
+    if (templateBuffer.length < 4 || templateBuffer.toString('hex', 0, 4) !== '504b0304') {
+      console.error('Invalid .docx file format');
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid template file format'
+      });
+    }
+    
+    // Set headers for file download
+    const filename = template.template_path.split('/').pop();
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Content-Length', templateBuffer.length);
+    
+    // Send the file
+    res.send(templateBuffer);
     
   } catch (error) {
     console.error('Error downloading template:', error);
@@ -639,17 +752,29 @@ const downloadPopulatedTemplate = async (req, res) => {
       }
     });
     
-    // Clean the value map to remove undefined/empty values
-    const cleanValueMap = {};
-    Object.entries(mappedTemplate.valueMap).forEach(([key, value]) => {
-      if (value && value.trim() !== '' && value !== 'undefined' && value !== 'null' && value !== null) {
-        cleanValueMap[key] = value;
+    // COMPREHENSIVE CLEANUP: Remove all undefined/empty values and prevent "UNDEFINED" from appearing
+    console.log('🔧 Starting comprehensive undefined cleanup for template download...');
+    
+    // Use utility function for comprehensive cleanup
+    const cleanValueMap = cleanUndefinedValues(mappedTemplate.valueMap);
+    
+    // CRITICAL: Final aggressive cleanup to prevent ANY undefined values
+    const finalCleanMap = {};
+    Object.keys(cleanValueMap).forEach(key => {
+      const value = cleanValueMap[key];
+      if (value === undefined || value === null || value === 'undefined' || value === 'null' || !value) {
+        finalCleanMap[key] = ''; // Force empty string
+        console.log(`🚨 FINAL CLEANUP: Forced ${key} to empty string (was: ${value})`);
+      } else {
+        finalCleanMap[key] = String(value); // Ensure it's a string
       }
     });
 
-    // Set the data to replace placeholders
-    console.log(`🔧 Setting template data:`, cleanValueMap);
-    doc.setData(cleanValueMap);
+    console.log(`🔧 Final template data prepared with ${Object.keys(finalCleanMap).length} fields`);
+    console.log(`🔧 Sample final data:`, Object.entries(finalCleanMap).slice(0, 3));
+
+    // Set the template variables with the final clean map
+    doc.setData(finalCleanMap);
     
     try {
       // Render the document (replace all placeholders)
@@ -671,13 +796,84 @@ const downloadPopulatedTemplate = async (req, res) => {
     }
     
     // Get the populated document as a buffer
-    const populatedBuffer = doc.getZip().generate({
+    let populatedBuffer = doc.getZip().generate({
       type: 'nodebuffer',
       compression: 'DEFLATE',
       compressionOptions: {
         level: 4,
       },
     });
+
+    // POST-PROCESSING: Check if the generated document still contains "undefined" text
+    // This is a last resort step to catch any remaining undefined values
+    try {
+      const zip = new PizZip(populatedBuffer);
+      const documentXml = zip.files["word/document.xml"];
+      
+      if (documentXml) {
+        let content = documentXml.asText();
+        const originalContent = content;
+        
+        // Replace any remaining "undefined" text with empty string
+        content = content.replace(/undefined/gi, ''); // Case insensitive replacement
+        content = content.replace(/UNDEFINED/gi, ''); // Also catch uppercase
+        content = content.replace(/null/gi, ''); // Also catch null values
+        content = content.replace(/NULL/gi, ''); // Also catch uppercase NULL
+        
+        // Change underline color from red to black for placeholder text
+        // This targets various red color formats in the document
+        content = content.replace(
+          /<w:color w:val="FF0000"\/>/g, 
+          '<w:color w:val="000000"/>'
+        );
+        
+        // Handle other red color variations
+        content = content.replace(
+          /<w:color w:val="red"\/>/g, 
+          '<w:color w:val="000000"/>'
+        );
+        
+        // Handle theme color red
+        content = content.replace(
+          /<w:color w:themeColor="accent2"\/>/g, 
+          '<w:color w:val="000000"/>'
+        );
+        
+        // Handle any color that might be red
+        content = content.replace(
+          /<w:color w:val="[Ff][Ff]0000"\/>/g, 
+          '<w:color w:val="000000"/>'
+        );
+        
+        // Remove any highlight formatting that might cause red color
+        content = content.replace(
+          /<w:highlight w:val="red"\/>/g, 
+          ''
+        );
+        
+        // Remove any red background colors
+        content = content.replace(
+          /<w:shd w:val="clear" w:color="FF0000"\/>/g, 
+          ''
+        );
+        
+        if (content !== originalContent) {
+          console.log('🚨 POST-PROCESSING: Found and removed "undefined" text and changed underline colors');
+          
+          // Update the document.xml content
+          zip.file("word/document.xml", content);
+          
+          // Regenerate the buffer with cleaned content
+          populatedBuffer = zip.generate({ type: 'nodebuffer' });
+          console.log('✅ Document post-processed and cleaned');
+        } else {
+          console.log('✅ No "undefined" text found in generated document');
+        }
+      }
+    } catch (postProcessError) {
+      console.error('Warning: Post-processing failed, using original buffer:', postProcessError.message);
+      // Continue with original buffer if post-processing fails
+    }
     
     // Set headers for file download
     const filename = template.template_path.split('/').pop().replace('_Template.docx', '_Populated.docx');
@@ -715,8 +911,8 @@ const getTemplateStats = async (req, res) => {
       where: { company_id: companyId },
       attributes: [
         'template_category',
-        [models.sequelize.fn('COUNT', models.sequelize.col('id')), 'total'],
-        [models.sequelize.fn('COUNT', models.sequelize.literal('CASE WHEN is_selected = true THEN 1 END')), 'selected']
+        [sequelize.fn('COUNT', sequelize.col('id')), 'total'],
+        [sequelize.fn('COUNT', sequelize.literal('CASE WHEN is_selected = true THEN 1 END')), 'selected']
       ],
       group: ['template_category']
     });
@@ -799,11 +995,211 @@ const getTemplateMappingPreview = async (req, res) => {
   }
 };
 
+// Get selected templates for a company (for admin review)
+const getSelectedTemplates = async (req, res) => {
+  try {
+    const { companyId } = req.params;
+    
+    console.log(`🔍 Fetching selected templates for company ${companyId}...`);
+
+    const selectedTemplates = await models.CompanyTemplate.findAll({
+      where: { 
+        company_id: companyId,
+        is_selected: true 
+      },
+      order: [['selected_at', 'DESC']]
+    });
+
+    console.log(`✅ Found ${selectedTemplates.length} selected templates`);
+
+    // Format the response
+    const formattedTemplates = selectedTemplates.map(ct => ({
+      id: ct.id,
+      template_id: ct.template_id,
+      template_name: ct.template_name || 'Unknown Template',
+      template_file: ct.template_path || '',
+      template_category: ct.template_category || '',
+      template_type: ct.template_type || '',
+      is_selected: ct.is_selected,
+      selected_at: ct.selected_at,
+      selected_by: ct.selected_by ? { id: ct.selected_by, name: 'Employee' } : null,
+      admin_comment: ct.admin_comment || '',
+      status: ct.status || 'pending'
+    }));
+
+    res.json({
+      success: true,
+      templates: formattedTemplates,
+      count: formattedTemplates.length
+    });
+
+  } catch (error) {
+    console.error('Error getting selected templates:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Failed to get selected templates',
+      details: error.message 
+    });
+  }
+};
+
+// Update admin comment for a template
+const updateTemplateComment = async (req, res) => {
+  try {
+    const { templateId } = req.params;
+    const { admin_comment } = req.body;
+    
+    console.log(`💬 Updating admin comment for template ${templateId}...`);
+    
+    const updatedTemplate = await models.CompanyTemplate.update(
+      { admin_comment },
+      { 
+        where: { id: templateId },
+        returning: true
+      }
+    );
+    
+    if (updatedTemplate[0] === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'Template not found'
+      });
+    }
+    
+    console.log(`✅ Admin comment updated for template ${templateId}`);
+    
+    res.json({
+      success: true,
+      message: 'Admin comment updated successfully',
+      template: updatedTemplate[1][0]
+    });
+    
+  } catch (error) {
+    console.error('Error updating template comment:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Failed to update template comment',
+      details: error.message 
+    });
+  }
+};
+
+// Update employee response for a template
+const updateEmployeeResponse = async (req, res) => {
+  try {
+    const { templateId } = req.params;
+    const { employee_response } = req.body;
+    
+    console.log(`💬 Updating employee response for template ${templateId}...`);
+    
+    const updatedTemplate = await models.CompanyTemplate.update(
+      { employee_response },
+      { 
+        where: { id: templateId },
+        returning: true
+      }
+    );
+    
+    if (updatedTemplate[0] === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'Template not found'
+      });
+    }
+    
+    console.log(`✅ Employee response updated for template ${templateId}`);
+    
+    res.json({
+      success: true,
+      message: 'Employee response updated successfully',
+      template: updatedTemplate[1][0]
+    });
+    
+  } catch (error) {
+    console.error('Error updating employee response:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Failed to update employee response',
+      details: error.message 
+    });
+  }
+};
+
+// Get template preview data for admin review
+const getTemplatePreview = async (req, res) => {
+  try {
+    const { companyId, templateId } = req.params;
+    
+    console.log(`🔍 Getting template preview for company ${companyId}, template ${templateId}`);
+    
+    // Get company template record
+    const companyTemplate = await CompanyTemplate.findOne({
+      where: { 
+        id: templateId,
+        company_id: companyId 
+      }
+    });
+
+    if (!companyTemplate) {
+      return res.status(404).json({ error: 'Template not found for this company' });
+    }
+
+    // Get company values
+    const companyValues = await CompanyValue.findAll({
+      where: { company_id: companyId }
+    });
+
+    console.log(`📊 Found ${companyValues.length} company values`);
+
+    // Create value mapping
+    const valueMap = {};
+    companyValues.forEach(cv => {
+      if (cv.field_key && cv.field_value) {
+        valueMap[cv.field_key] = cv.field_value;
+      }
+    });
+
+    // Get template placeholders (simplified for now)
+    const placeholders = Object.keys(valueMap);
+    
+    // Create mapping preview
+    const mapping = {};
+    placeholders.forEach(key => {
+      mapping[key] = valueMap[key] || '';
+    });
+
+    console.log(`📊 Created mapping for ${placeholders.length} placeholders:`, mapping);
+
+    const previewData = {
+      template_name: companyTemplate.template_name || 'Unknown Template',
+      template_file: companyTemplate.template_path || '',
+      placeholders: placeholders,
+      mapping: mapping,
+      populatedContent: 'Template content will be populated with company data'
+    };
+
+    console.log('📊 Template preview data:', previewData);
+
+    res.json({
+      success: true,
+      mappingPreview: previewData
+    });
+
+  } catch (error) {
+    console.error('Error getting template preview:', error);
+    res.status(500).json({ error: 'Failed to get template preview' });
+  }
+};
+
 module.exports = {
   getCompanyTemplates,
   updateCompanyTemplates,
   downloadTemplate,
   downloadPopulatedTemplate,
   getTemplateStats,
-  getTemplateMappingPreview
+  getTemplateMappingPreview,
+  getSelectedTemplates,
+  updateTemplateComment,
+  updateEmployeeResponse,
+  getTemplatePreview
 };

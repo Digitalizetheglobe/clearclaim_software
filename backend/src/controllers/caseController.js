@@ -238,19 +238,70 @@ const updateCase = async (req, res) => {
   }
 };
 
-// Delete case
+// Delete case with cascading deletes
 const deleteCase = async (req, res) => {
   try {
-    const caseId = req.params.id;
+    const caseId = req.params.caseId || req.params.id; // Support both route patterns
+    console.log(`🔍 Delete case request - params:`, req.params);
+    console.log(`🔍 Attempting to delete case with ID: ${caseId}`);
+    
     const caseData = await Case.findByPk(caseId);
 
     if (!caseData) {
+      console.log(`❌ Case with ID ${caseId} not found in database`);
       return res.status(404).json({ error: 'Case not found.' });
     }
 
+    console.log(`🗑️ Starting cascading delete for case ${caseId}`);
+
+    // Get all companies for this case first
+    const { Company, CompanyValue, CaseValue, Claimant, CompanyTemplate } = require('../models');
+    
+    const companies = await Company.findAll({
+      where: { case_id: caseId }
+    });
+
+    console.log(`Found ${companies.length} companies to delete`);
+
+    // Delete all related data for each company
+    for (const company of companies) {
+      console.log(`Deleting data for company ${company.id}`);
+      
+      // Delete company templates
+      await CompanyTemplate.destroy({
+        where: { company_id: company.id }
+      });
+
+      // Delete claimants
+      await Claimant.destroy({
+        where: { company_id: company.id }
+      });
+
+      // Delete company values
+      await CompanyValue.destroy({
+        where: { company_id: company.id }
+      });
+
+      // Delete the company
+      await company.destroy();
+    }
+
+    // Delete case values
+    const deletedCaseValues = await CaseValue.destroy({
+      where: { case_id: caseId }
+    });
+    console.log(`Deleted ${deletedCaseValues} case values`);
+
+    // Finally delete the case
     await caseData.destroy();
 
-    res.json({ message: 'Case deleted successfully' });
+    console.log(`✅ Successfully deleted case ${caseId} and all related data`);
+
+    res.json({ 
+      message: 'Case and all related data deleted successfully',
+      deletedCompanies: companies.length,
+      deletedCaseValues: deletedCaseValues
+    });
   } catch (error) {
     console.error('Delete case error:', error);
     res.status(500).json({ error: 'Failed to delete case.' });
