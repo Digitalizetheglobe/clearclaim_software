@@ -8,7 +8,9 @@ const {
   getCompanyValues,
   updateCompanyValues,
   updateCompanyStatus,
-  deleteCompany
+  deleteCompany,
+  addJointHolder,
+  removeJointHolder
 } = require('../controllers/companyController');
 
 const { deleteCase } = require('../controllers/caseController');
@@ -39,5 +41,12 @@ router.delete('/:companyId', deleteCompany);
 
 // Delete case (from companies context)
 router.delete('/case/:caseId', deleteCase);
+
+// Joint Holder Management
+// Add new joint holder fields
+router.post('/:companyId/joint-holders', addJointHolder);
+
+// Remove joint holder fields
+router.delete('/:companyId/joint-holders', removeJointHolder);
 
 module.exports = router;

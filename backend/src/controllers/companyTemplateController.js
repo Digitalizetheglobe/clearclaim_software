@@ -313,53 +313,121 @@ const mapCompanyValuesToTemplate = async (companyId, templatePath) => {
         const label = cv.caseField.field_label.toLowerCase();
         
         // Map common variations - be more specific to avoid overwriting
-        if (key === 'name as per aadhar c1') {
-          if (!valueMap['Name as per Aadhar C1']) valueMap['Name as per Aadhar C1'] = cv.field_value;
-          if (!valueMap['name_c1']) valueMap['name_c1'] = cv.field_value;
+        // Handle C1, C2, C3, and dynamic joint holders (C4, C5, C6, etc.)
+        if (key.includes('name as per aadhar c') && key.match(/c\d+$/)) {
+          const suffix = key.match(/c(\d+)$/)[1];
+          const fieldKey = `Name as per Aadhar C${suffix}`;
+          if (!valueMap[fieldKey]) valueMap[fieldKey] = cv.field_value;
+          if (!valueMap[`name_c${suffix}`]) valueMap[`name_c${suffix}`] = cv.field_value;
         }
-        if (key === 'name as per aadhar c2') {
-          if (!valueMap['Name as per Aadhar C2']) valueMap['Name as per Aadhar C2'] = cv.field_value;
-          if (!valueMap['name_c2']) valueMap['name_c2'] = cv.field_value;
+        if (key.includes('name as per pan c') && key.match(/c\d+$/)) {
+          const suffix = key.match(/c(\d+)$/)[1];
+          const fieldKey = `Name as per PAN C${suffix}`;
+          if (!valueMap[fieldKey]) valueMap[fieldKey] = cv.field_value;
         }
-        if (key === 'name as per aadhar c3') {
-          if (!valueMap['Name as per Aadhar C3']) valueMap['Name as per Aadhar C3'] = cv.field_value;
-          if (!valueMap['name_c3']) valueMap['name_c3'] = cv.field_value;
+        if (key.includes('name as per cml c') && key.match(/c\d+$/)) {
+          const suffix = key.match(/c(\d+)$/)[1];
+          const fieldKey = `Name as per CML C${suffix}`;
+          if (!valueMap[fieldKey]) valueMap[fieldKey] = cv.field_value;
         }
-        if (key === 'father name c1') {
-          if (!valueMap['Father Name C1']) valueMap['Father Name C1'] = cv.field_value;
-          if (!valueMap['father_name_c1']) valueMap['father_name_c1'] = cv.field_value;
+        if (key.includes('name as per bank c') && key.match(/c\d+$/)) {
+          const suffix = key.match(/c(\d+)$/)[1];
+          const fieldKey = `Name as per Bank C${suffix}`;
+          if (!valueMap[fieldKey]) valueMap[fieldKey] = cv.field_value;
         }
-        if (key === 'father name c2') {
-          if (!valueMap['Father Name C2']) valueMap['Father Name C2'] = cv.field_value;
-          if (!valueMap['father_name_c2']) valueMap['father_name_c2'] = cv.field_value;
+        if (key.includes('name as per passport c') && key.match(/c\d+$/)) {
+          const suffix = key.match(/c(\d+)$/)[1];
+          const fieldKey = `Name as per Passport C${suffix}`;
+          if (!valueMap[fieldKey]) valueMap[fieldKey] = cv.field_value;
         }
-        if (key === 'father name c3') {
-          if (!valueMap['Father Name C3']) valueMap['Father Name C3'] = cv.field_value;
-          if (!valueMap['father_name_c3']) valueMap['father_name_c3'] = cv.field_value;
+        if (key.includes('name as per succession') && key.match(/c\d+$/)) {
+          const suffix = key.match(/c(\d+)$/)[1];
+          const fieldKey = `Name as per Succession/WILL/LHA C${suffix}`;
+          if (!valueMap[fieldKey]) valueMap[fieldKey] = cv.field_value;
         }
-        if (key === 'address c1') {
-          if (!valueMap['Address C1']) valueMap['Address C1'] = cv.field_value;
-          if (!valueMap['address_c1']) valueMap['address_c1'] = cv.field_value;
+        if (key.includes('name as per cert c') && key.match(/c\d+$/)) {
+          const suffix = key.match(/c(\d+)$/)[1];
+          const fieldKey = `Name as per Cert C${suffix}`;
+          if (!valueMap[fieldKey]) valueMap[fieldKey] = cv.field_value;
         }
-        if (key === 'address c2') {
-          if (!valueMap['Address C2']) valueMap['Address C2'] = cv.field_value;
-          if (!valueMap['address_c2']) valueMap['address_c2'] = cv.field_value;
+        // Handle father name fields dynamically
+        if (key.includes('father name c') && key.match(/c\d+$/)) {
+          const suffix = key.match(/c(\d+)$/)[1];
+          const fieldKey = `Father Name C${suffix}`;
+          if (!valueMap[fieldKey]) valueMap[fieldKey] = cv.field_value;
+          if (!valueMap[`father_name_c${suffix}`]) valueMap[`father_name_c${suffix}`] = cv.field_value;
         }
-        if (key === 'address c3') {
-          if (!valueMap['Address C3']) valueMap['Address C3'] = cv.field_value;
-          if (!valueMap['address_c3']) valueMap['address_c3'] = cv.field_value;
+        
+        // Handle address fields dynamically
+        if (key.includes('address c') && key.match(/c\d+$/)) {
+          const suffix = key.match(/c(\d+)$/)[1];
+          const fieldKey = `Address C${suffix}`;
+          if (!valueMap[fieldKey]) valueMap[fieldKey] = cv.field_value;
+          if (!valueMap[`address_c${suffix}`]) valueMap[`address_c${suffix}`] = cv.field_value;
         }
-        if (key === 'pan c1') {
-          if (!valueMap['PAN C1']) valueMap['PAN C1'] = cv.field_value;
-          if (!valueMap['pan_c1']) valueMap['pan_c1'] = cv.field_value;
+        
+        // Handle PAN fields dynamically
+        if (key.includes('pan c') && key.match(/c\d+$/)) {
+          const suffix = key.match(/c(\d+)$/)[1];
+          const fieldKey = `PAN C${suffix}`;
+          if (!valueMap[fieldKey]) valueMap[fieldKey] = cv.field_value;
+          if (!valueMap[`pan_c${suffix}`]) valueMap[`pan_c${suffix}`] = cv.field_value;
         }
-        if (key === 'pan c2') {
-          if (!valueMap['PAN C2']) valueMap['PAN C2'] = cv.field_value;
-          if (!valueMap['pan_c2']) valueMap['pan_c2'] = cv.field_value;
+        
+        // Handle age fields dynamically
+        if (key.includes('age c') && key.match(/c\d+$/)) {
+          const suffix = key.match(/c(\d+)$/)[1];
+          const fieldKey = `Age C${suffix}`;
+          if (!valueMap[fieldKey]) valueMap[fieldKey] = cv.field_value;
+          if (!valueMap[`age_c${suffix}`]) valueMap[`age_c${suffix}`] = cv.field_value;
         }
-        if (key === 'pan c3') {
-          if (!valueMap['PAN C3']) valueMap['PAN C3'] = cv.field_value;
-          if (!valueMap['pan_c3']) valueMap['pan_c3'] = cv.field_value;
+        
+        // Handle deceased relation fields dynamically
+        if (key.includes('deceased relation c') && key.match(/c\d+$/)) {
+          const suffix = key.match(/c(\d+)$/)[1];
+          const fieldKey = `Deceased Relation C${suffix}`;
+          if (!valueMap[fieldKey]) valueMap[fieldKey] = cv.field_value;
+          if (!valueMap[`relation_c${suffix}`]) valueMap[`relation_c${suffix}`] = cv.field_value;
+        }
+        
+        // Handle mobile number fields dynamically
+        if (key.includes('mobile no c') && key.match(/c\d+$/)) {
+          const suffix = key.match(/c(\d+)$/)[1];
+          const fieldKey = `Mobile No C${suffix}`;
+          if (!valueMap[fieldKey]) valueMap[fieldKey] = cv.field_value;
+          if (!valueMap[`mobile_c${suffix}`]) valueMap[`mobile_c${suffix}`] = cv.field_value;
+        }
+        
+        // Handle email fields dynamically
+        if (key.includes('email id c') && key.match(/c\d+$/)) {
+          const suffix = key.match(/c(\d+)$/)[1];
+          const fieldKey = `Email ID C${suffix}`;
+          if (!valueMap[fieldKey]) valueMap[fieldKey] = cv.field_value;
+          if (!valueMap[`email_c${suffix}`]) valueMap[`email_c${suffix}`] = cv.field_value;
+        }
+        
+        // Handle DOB fields dynamically
+        if (key.includes('dob c') && key.match(/c\d+$/)) {
+          const suffix = key.match(/c(\d+)$/)[1];
+          const fieldKey = `DOB C${suffix}`;
+          if (!valueMap[fieldKey]) valueMap[fieldKey] = cv.field_value;
+          if (!valueMap[`dob_c${suffix}`]) valueMap[`dob_c${suffix}`] = cv.field_value;
+        }
+        
+        // Handle PIN fields dynamically
+        if (key.includes('pin c') && key.match(/c\d+$/)) {
+          const suffix = key.match(/c(\d+)$/)[1];
+          const fieldKey = `PIN C${suffix}`;
+          if (!valueMap[fieldKey]) valueMap[fieldKey] = cv.field_value;
+          if (!valueMap[`pin_c${suffix}`]) valueMap[`pin_c${suffix}`] = cv.field_value;
+        }
+        
+        // Handle old address fields dynamically
+        if (key.includes('old address c') && key.match(/c\d+$/)) {
+          const suffix = key.match(/c(\d+)$/)[1];
+          const fieldKey = `Old Address C${suffix}`;
+          if (!valueMap[fieldKey]) valueMap[fieldKey] = cv.field_value;
+          if (!valueMap[`old_address_c${suffix}`]) valueMap[`old_address_c${suffix}`] = cv.field_value;
         }
         if (key === 'company name') {
           if (!valueMap['Company Name']) valueMap['Company Name'] = cv.field_value;
@@ -382,25 +450,143 @@ const mapCompanyValuesToTemplate = async (companyId, templatePath) => {
       'Company Name': getValueOrPlaceholder(valueMap['company_name'] || valueMap['Company Name'], 'Company Name'),
       'Folio No': getValueOrPlaceholder(valueMap['folio_no'] || valueMap['Folio No'], 'Folio No'),
       'Total Shares': getValueOrPlaceholder(valueMap['total_shares'] || valueMap['Total Shares'], 'Total Shares'),
-      'Name as per Aadhar C1': getValueOrPlaceholder(valueMap['name_c1'] || valueMap['Name as per Aadhar C1'], 'Name as per Aadhar C1'),
-      'Name as per Aadhar C2': getValueOrPlaceholder(valueMap['name_c2'] || valueMap['Name as per Aadhar C2'], 'Name as per Aadhar C2'),
-      'Name as per Aadhar C3': getValueOrPlaceholder(valueMap['name_c3'] || valueMap['Name as per Aadhar C3'], 'Name as per Aadhar C3'),
-      'Address C1': getValueOrPlaceholder(valueMap['address_c1'] || valueMap['Address C1'], 'Address C1'),
-      'Address C2': getValueOrPlaceholder(valueMap['address_c2'] || valueMap['Address C2'], 'Address C2'),
-      'Address C3': getValueOrPlaceholder(valueMap['address_c3'] || valueMap['Address C3'], 'Address C3'),
-      'PAN C1': getValueOrPlaceholder(valueMap['pan_c1'] || valueMap['PAN C1'], 'PAN C1'),
-      'PAN C2': getValueOrPlaceholder(valueMap['pan_c2'] || valueMap['PAN C2'], 'PAN C2'),
-      'PAN C3': getValueOrPlaceholder(valueMap['pan_c3'] || valueMap['PAN C3'], 'PAN C3'),
-      'Age C1': getValueOrPlaceholder(valueMap['age_c1'] || valueMap['Age C1'], 'Age C1'),
-      'Age C2': getValueOrPlaceholder(valueMap['age_c2'] || valueMap['Age C2'], 'Age C2'),
-      'Age C3': getValueOrPlaceholder(valueMap['age_c3'] || valueMap['Age C3'], 'Age C3'),
-      'Deceased Relation C1': getValueOrPlaceholder(valueMap['relation_c1'] || valueMap['Deceased Relation C1'], 'Deceased Relation C1'),
-      'Deceased Relation C2': getValueOrPlaceholder(valueMap['relation_c2'] || valueMap['Deceased Relation C2'], 'Deceased Relation C2'),
-      'Deceased Relation C3': getValueOrPlaceholder(valueMap['relation_c3'] || valueMap['Deceased Relation C3'], 'Deceased Relation C3'),
       'Date of Issue': getValueOrPlaceholder(valueMap['date_of_issue'] || valueMap['Date of Issue'] || new Date().toLocaleDateString('en-IN'), 'Date of Issue'),
       'Current Date': new Date().toLocaleDateString('en-IN'),
       'Today Date': new Date().toLocaleDateString('en-IN')
     };
+
+    // Dynamically add mappings for all joint holders (C1, C2, C3, C4, C5, etc.)
+    // Find all unique joint holder numbers from the valueMap
+    const jointHolderNumbers = new Set();
+    Object.keys(valueMap).forEach(key => {
+      const match = key.match(/[cC](\d+)$/);
+      if (match) {
+        jointHolderNumbers.add(match[1]);
+      }
+    });
+
+    // Add mappings for each joint holder
+    jointHolderNumbers.forEach(num => {
+      const cnSuffix = `C${num}`;
+      
+      // Personal Information
+      templateMappings[`Name as per Aadhar ${cnSuffix}`] = getValueOrPlaceholder(
+        valueMap[`name_c${num}`] || valueMap[`Name as per Aadhar ${cnSuffix}`], 
+        `Name as per Aadhar ${cnSuffix}`
+      );
+      templateMappings[`Name as per PAN ${cnSuffix}`] = getValueOrPlaceholder(
+        valueMap[`Name as per PAN ${cnSuffix}`], 
+        `Name as per PAN ${cnSuffix}`
+      );
+      templateMappings[`Name as per CML ${cnSuffix}`] = getValueOrPlaceholder(
+        valueMap[`Name as per CML ${cnSuffix}`], 
+        `Name as per CML ${cnSuffix}`
+      );
+      templateMappings[`Name as per Bank ${cnSuffix}`] = getValueOrPlaceholder(
+        valueMap[`Name as per Bank ${cnSuffix}`], 
+        `Name as per Bank ${cnSuffix}`
+      );
+      templateMappings[`Name as per Passport ${cnSuffix}`] = getValueOrPlaceholder(
+        valueMap[`Name as per Passport ${cnSuffix}`], 
+        `Name as per Passport ${cnSuffix}`
+      );
+      templateMappings[`Name as per Succession/WILL/LHA ${cnSuffix}`] = getValueOrPlaceholder(
+        valueMap[`Name as per Succession/WILL/LHA ${cnSuffix}`], 
+        `Name as per Succession/WILL/LHA ${cnSuffix}`
+      );
+      templateMappings[`Name as per Cert ${cnSuffix}`] = getValueOrPlaceholder(
+        valueMap[`Name as per Cert ${cnSuffix}`], 
+        `Name as per Cert ${cnSuffix}`
+      );
+      templateMappings[`PAN ${cnSuffix}`] = getValueOrPlaceholder(
+        valueMap[`pan_c${num}`] || valueMap[`PAN ${cnSuffix}`], 
+        `PAN ${cnSuffix}`
+      );
+      templateMappings[`Mobile No ${cnSuffix}`] = getValueOrPlaceholder(
+        valueMap[`mobile_c${num}`] || valueMap[`Mobile No ${cnSuffix}`], 
+        `Mobile No ${cnSuffix}`
+      );
+      templateMappings[`Email ID ${cnSuffix}`] = getValueOrPlaceholder(
+        valueMap[`email_c${num}`] || valueMap[`Email ID ${cnSuffix}`], 
+        `Email ID ${cnSuffix}`
+      );
+      templateMappings[`DOB ${cnSuffix}`] = getValueOrPlaceholder(
+        valueMap[`dob_c${num}`] || valueMap[`DOB ${cnSuffix}`], 
+        `DOB ${cnSuffix}`
+      );
+      templateMappings[`Father Name ${cnSuffix}`] = getValueOrPlaceholder(
+        valueMap[`father_name_c${num}`] || valueMap[`Father Name ${cnSuffix}`], 
+        `Father Name ${cnSuffix}`
+      );
+      templateMappings[`Age ${cnSuffix}`] = getValueOrPlaceholder(
+        valueMap[`age_c${num}`] || valueMap[`Age ${cnSuffix}`], 
+        `Age ${cnSuffix}`
+      );
+      templateMappings[`Deceased Relation ${cnSuffix}`] = getValueOrPlaceholder(
+        valueMap[`relation_c${num}`] || valueMap[`Deceased Relation ${cnSuffix}`], 
+        `Deceased Relation ${cnSuffix}`
+      );
+      templateMappings[`Address ${cnSuffix}`] = getValueOrPlaceholder(
+        valueMap[`address_c${num}`] || valueMap[`Address ${cnSuffix}`], 
+        `Address ${cnSuffix}`
+      );
+      templateMappings[`PIN ${cnSuffix}`] = getValueOrPlaceholder(
+        valueMap[`pin_c${num}`] || valueMap[`PIN ${cnSuffix}`], 
+        `PIN ${cnSuffix}`
+      );
+      templateMappings[`Old Address ${cnSuffix}`] = getValueOrPlaceholder(
+        valueMap[`old_address_c${num}`] || valueMap[`Old Address ${cnSuffix}`], 
+        `Old Address ${cnSuffix}`
+      );
+
+      // Banking Information
+      templateMappings[`Bank AC Type ${cnSuffix}`] = getValueOrPlaceholder(
+        valueMap[`Bank AC Type ${cnSuffix}`], 
+        `Bank AC Type ${cnSuffix}`
+      );
+      templateMappings[`Bank Name ${cnSuffix}`] = getValueOrPlaceholder(
+        valueMap[`Bank Name ${cnSuffix}`], 
+        `Bank Name ${cnSuffix}`
+      );
+      templateMappings[`Bank AC ${cnSuffix}`] = getValueOrPlaceholder(
+        valueMap[`Bank AC ${cnSuffix}`], 
+        `Bank AC ${cnSuffix}`
+      );
+      templateMappings[`Bank Branch ${cnSuffix}`] = getValueOrPlaceholder(
+        valueMap[`Bank Branch ${cnSuffix}`], 
+        `Bank Branch ${cnSuffix}`
+      );
+      templateMappings[`IFSC ${cnSuffix}`] = getValueOrPlaceholder(
+        valueMap[`IFSC ${cnSuffix}`], 
+        `IFSC ${cnSuffix}`
+      );
+      templateMappings[`Bank Address ${cnSuffix}`] = getValueOrPlaceholder(
+        valueMap[`Bank Address ${cnSuffix}`], 
+        `Bank Address ${cnSuffix}`
+      );
+      templateMappings[`MICR ${cnSuffix}`] = getValueOrPlaceholder(
+        valueMap[`MICR ${cnSuffix}`], 
+        `MICR ${cnSuffix}`
+      );
+      templateMappings[`A/C Open Date ${cnSuffix}`] = getValueOrPlaceholder(
+        valueMap[`A/C Open Date ${cnSuffix}`], 
+        `A/C Open Date ${cnSuffix}`
+      );
+      templateMappings[`Bank City ${cnSuffix}`] = getValueOrPlaceholder(
+        valueMap[`Bank City ${cnSuffix}`], 
+        `Bank City ${cnSuffix}`
+      );
+      templateMappings[`Bank PIN ${cnSuffix}`] = getValueOrPlaceholder(
+        valueMap[`Bank PIN ${cnSuffix}`], 
+        `Bank PIN ${cnSuffix}`
+      );
+
+      // DEMAT Account
+      templateMappings[`DEMAT AC ${cnSuffix}`] = getValueOrPlaceholder(
+        valueMap[`DEMAT AC ${cnSuffix}`], 
+        `DEMAT AC ${cnSuffix}`
+      );
+    });
 
     // Merge template mappings with valueMap
     Object.assign(valueMap, templateMappings);
@@ -418,17 +604,53 @@ const mapCompanyValuesToTemplate = async (companyId, templatePath) => {
     console.log('🔧 Initializing all template placeholders with empty strings...');
     const commonPlaceholders = [
       'Company Name', 'Folio No', 'Total Shares',
-      'Name as per Aadhar C1', 'Name as per Aadhar C2', 'Name as per Aadhar C3',
-      'Address C1', 'Address C2', 'Address C3',
-      'PAN C1', 'PAN C2', 'PAN C3',
-      'Age C1', 'Age C2', 'Age C3',
-      'Deceased Relation C1', 'Deceased Relation C2', 'Deceased Relation C3',
-      'Father Name C1', 'Father Name C2', 'Father Name C3',
-      'Mobile No C1', 'Mobile No C2', 'Mobile No C3',
-      'Email ID C1', 'Email ID C2', 'Email ID C3',
-      'DOB C1', 'DOB C2', 'DOB C3',
       'Date of Issue', 'Current Date', 'Today Date'
     ];
+
+    // Dynamically add placeholders for all joint holders found in the data
+    const placeholderJointHolderNumbers = new Set();
+    Object.keys(valueMap).forEach(key => {
+      const match = key.match(/[cC](\d+)$/);
+      if (match) {
+        placeholderJointHolderNumbers.add(match[1]);
+      }
+    });
+
+    // Add placeholders for each joint holder
+    placeholderJointHolderNumbers.forEach(num => {
+      const cnSuffix = `C${num}`;
+      const jointHolderPlaceholders = [
+        `Name as per Aadhar ${cnSuffix}`,
+        `Name as per PAN ${cnSuffix}`,
+        `Name as per CML ${cnSuffix}`,
+        `Name as per Bank ${cnSuffix}`,
+        `Name as per Passport ${cnSuffix}`,
+        `Name as per Succession/WILL/LHA ${cnSuffix}`,
+        `Name as per Cert ${cnSuffix}`,
+        `PAN ${cnSuffix}`,
+        `Mobile No ${cnSuffix}`,
+        `Email ID ${cnSuffix}`,
+        `DOB ${cnSuffix}`,
+        `Father Name ${cnSuffix}`,
+        `Age ${cnSuffix}`,
+        `Deceased Relation ${cnSuffix}`,
+        `Address ${cnSuffix}`,
+        `PIN ${cnSuffix}`,
+        `Old Address ${cnSuffix}`,
+        `Bank AC Type ${cnSuffix}`,
+        `Bank Name ${cnSuffix}`,
+        `Bank AC ${cnSuffix}`,
+        `Bank Branch ${cnSuffix}`,
+        `IFSC ${cnSuffix}`,
+        `Bank Address ${cnSuffix}`,
+        `MICR ${cnSuffix}`,
+        `A/C Open Date ${cnSuffix}`,
+        `Bank City ${cnSuffix}`,
+        `Bank PIN ${cnSuffix}`,
+        `DEMAT AC ${cnSuffix}`
+      ];
+      commonPlaceholders.push(...jointHolderPlaceholders);
+    });
     
     commonPlaceholders.forEach(placeholder => {
       if (!valueMap.hasOwnProperty(placeholder)) {
