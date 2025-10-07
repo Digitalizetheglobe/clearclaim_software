@@ -36,7 +36,7 @@ const cleanUndefinedValues = (obj) => {
 
 // Helper function to get appropriate placeholder text for different field types
 const getPlaceholderText = (key) => {
-  // Return underlines with normal formatting to avoid red color
+  // Return underlines with normal formatting (black color)
   return '_________________';
 };
 
@@ -984,11 +984,12 @@ const downloadPopulatedTemplate = async (req, res) => {
     const finalCleanMap = {};
     Object.keys(cleanValueMap).forEach(key => {
       const value = cleanValueMap[key];
-      if (value === undefined || value === null || value === 'undefined' || value === 'null' || !value) {
-        finalCleanMap[key] = ''; // Force empty string
+      if (value === undefined || value === null || value === 'undefined' || value === 'null' || !value || value === '_________________') {
+        finalCleanMap[key] = ''; // Force empty string for placeholders
         console.log(`🚨 FINAL CLEANUP: Forced ${key} to empty string (was: ${value})`);
       } else {
-        finalCleanMap[key] = String(value); // Ensure it's a string
+        finalCleanMap[key] = String(value); // Keep actual values as-is
+        console.log(`✅ KEEPING VALUE: ${key} = ${value}`);
       }
     });
 
@@ -1042,45 +1043,12 @@ const downloadPopulatedTemplate = async (req, res) => {
         content = content.replace(/null/gi, ''); // Also catch null values
         content = content.replace(/NULL/gi, ''); // Also catch uppercase NULL
         
-        // Change underline color from red to black for placeholder text
-        // This targets various red color formats in the document
-        content = content.replace(
-          /<w:color w:val="FF0000"\/>/g, 
-          '<w:color w:val="000000"/>'
-        );
-        
-        // Handle other red color variations
-        content = content.replace(
-          /<w:color w:val="red"\/>/g, 
-          '<w:color w:val="000000"/>'
-        );
-        
-        // Handle theme color red
-        content = content.replace(
-          /<w:color w:themeColor="accent2"\/>/g, 
-          '<w:color w:val="000000"/>'
-        );
-        
-        // Handle any color that might be red
-        content = content.replace(
-          /<w:color w:val="[Ff][Ff]0000"\/>/g, 
-          '<w:color w:val="000000"/>'
-        );
-        
-        // Remove any highlight formatting that might cause red color
-        content = content.replace(
-          /<w:highlight w:val="red"\/>/g, 
-          ''
-        );
-        
-        // Remove any red background colors
-        content = content.replace(
-          /<w:shd w:val="clear" w:color="FF0000"\/>/g, 
-          ''
-        );
+        // Keep red color for actual data values, only change placeholders to black
+        // This approach preserves the original template formatting for real data
+        console.log('✅ Preserving red color for actual database values, only cleaning undefined text');
         
         if (content !== originalContent) {
-          console.log('🚨 POST-PROCESSING: Found and removed "undefined" text and changed underline colors');
+          console.log('🚨 POST-PROCESSING: Found and removed "undefined" text, preserving data colors');
           
           // Update the document.xml content
           zip.file("word/document.xml", content);

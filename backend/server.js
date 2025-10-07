@@ -52,7 +52,7 @@ app.use((err, req, res, next) => {
 
 // 404 handler
 app.use('*', (req, res) => {
-  res.status(404).json({ error: 'Route not found' });
+  res.status(404).json({ error: 'Welcome to ClearClaim Backend APIs v 1.0.0' });
 });
 
 const PORT = process.env.PORT || 4000;
