@@ -40,6 +40,51 @@ const getPlaceholderText = (key) => {
   return '_________________';
 };
 
+// Helper function to format dates in DD/MM/YY format
+const formatDate = (dateValue) => {
+  if (!dateValue) return '';
+  
+  try {
+    // Handle different date formats
+    let date;
+    
+    if (dateValue instanceof Date) {
+      date = dateValue;
+    } else if (typeof dateValue === 'string') {
+      // Handle YYYY-MM-DD format
+      if (dateValue.match(/^\d{4}-\d{2}-\d{2}$/)) {
+        date = new Date(dateValue + 'T00:00:00');
+      } 
+      // Handle DD/MM/YYYY format
+      else if (dateValue.match(/^\d{1,2}\/\d{1,2}\/\d{4}$/)) {
+        const [day, month, year] = dateValue.split('/');
+        date = new Date(year, month - 1, day);
+      }
+      // Handle other formats
+      else {
+        date = new Date(dateValue);
+      }
+    } else {
+      date = new Date(dateValue);
+    }
+    
+    // Check if date is valid
+    if (isNaN(date.getTime())) {
+      return '';
+    }
+    
+    // Format as DD/MM/YY
+    const day = date.getDate().toString().padStart(2, '0');
+    const month = (date.getMonth() + 1).toString().padStart(2, '0');
+    const year = date.getFullYear().toString().slice(-2); // Last 2 digits
+    
+    return `${day}/${month}/${year}`;
+  } catch (error) {
+    console.warn(`Error formatting date: ${dateValue}`, error);
+    return '';
+  }
+};
+
 // Helper function to get value or appropriate placeholder
 const getValueOrPlaceholder = (value, fieldName) => {
   if (!value || 
@@ -49,6 +94,14 @@ const getValueOrPlaceholder = (value, fieldName) => {
       value === 'NULL' ||
       (typeof value === 'string' && value.trim() === '')) {
     return getPlaceholderText(fieldName);
+  }
+  
+  // Special handling for date fields
+  if (fieldName && (fieldName.includes('Date') || fieldName.includes('DOB'))) {
+    const formattedDate = formatDate(value);
+    if (formattedDate) {
+      return formattedDate;
+    }
   }
   
   // Clean the value of any undefined text
@@ -406,6 +459,14 @@ const mapCompanyValuesToTemplate = async (companyId, templatePath) => {
           if (!valueMap[`email_c${suffix}`]) valueMap[`email_c${suffix}`] = cv.field_value;
         }
         
+        // Handle account opening date fields dynamically
+        if ((key.includes('account open') || key.includes('a/c open') || key.includes('bank account open')) && key.match(/c\d+$/)) {
+          const suffix = key.match(/c(\d+)$/)[1];
+          const fieldKey = `A/C Open Date C${suffix}`;
+          if (!valueMap[fieldKey]) valueMap[fieldKey] = cv.field_value;
+          if (!valueMap[`account_open_date_c${suffix}`]) valueMap[`account_open_date_c${suffix}`] = cv.field_value;
+        }
+        
         // Handle DOB fields dynamically
         if (key.includes('dob c') && key.match(/c\d+$/)) {
           const suffix = key.match(/c(\d+)$/)[1];
@@ -450,9 +511,9 @@ const mapCompanyValuesToTemplate = async (companyId, templatePath) => {
       'Company Name': getValueOrPlaceholder(valueMap['company_name'] || valueMap['Company Name'], 'Company Name'),
       'Folio No': getValueOrPlaceholder(valueMap['folio_no'] || valueMap['Folio No'], 'Folio No'),
       'Total Shares': getValueOrPlaceholder(valueMap['total_shares'] || valueMap['Total Shares'], 'Total Shares'),
-      'Date of Issue': getValueOrPlaceholder(valueMap['date_of_issue'] || valueMap['Date of Issue'] || new Date().toLocaleDateString('en-IN'), 'Date of Issue'),
-      'Current Date': new Date().toLocaleDateString('en-IN'),
-      'Today Date': new Date().toLocaleDateString('en-IN')
+      'Date of Issue': getValueOrPlaceholder(valueMap['date_of_issue'] || valueMap['Date of Issue'] || new Date(), 'Date of Issue'),
+      'Current Date': formatDate(new Date()),
+      'Today Date': formatDate(new Date())
     };
 
     // Dynamically add mappings for all joint holders (C1, C2, C3, C4, C5, etc.)
@@ -514,6 +575,10 @@ const mapCompanyValuesToTemplate = async (companyId, templatePath) => {
         valueMap[`dob_c${num}`] || valueMap[`DOB ${cnSuffix}`], 
         `DOB ${cnSuffix}`
       );
+      templateMappings[`Nominee DOB`] = getValueOrPlaceholder(
+        valueMap[`Nominee DOB`], 
+        `Nominee DOB`
+      );
       templateMappings[`Father Name ${cnSuffix}`] = getValueOrPlaceholder(
         valueMap[`father_name_c${num}`] || valueMap[`Father Name ${cnSuffix}`], 
         `Father Name ${cnSuffix}`
@@ -568,8 +633,13 @@ const mapCompanyValuesToTemplate = async (companyId, templatePath) => {
         valueMap[`MICR ${cnSuffix}`], 
         `MICR ${cnSuffix}`
       );
+      // For A/C Open Date, provide a fallback if no data exists
+      const accountOpenDate = valueMap[`A/C Open Date ${cnSuffix}`] || 
+                             valueMap[`account_open_date_c${num}`] ||
+                             valueMap[`bank_account_open_date_${num}`];
+      
       templateMappings[`A/C Open Date ${cnSuffix}`] = getValueOrPlaceholder(
-        valueMap[`A/C Open Date ${cnSuffix}`], 
+        accountOpenDate || new Date(), // Fallback to current date if no data
         `A/C Open Date ${cnSuffix}`
       );
       templateMappings[`Bank City ${cnSuffix}`] = getValueOrPlaceholder(
@@ -971,6 +1041,16 @@ const downloadPopulatedTemplate = async (req, res) => {
       delimiters: {
         start: '[',
         end: ']'
+      },
+      nullGetter: function(part, scopeManager) {
+        // Return empty string for any missing values
+        if (!part.module) {
+          return '';
+        }
+        if (part.module === 'rawxml') {
+          return '';
+        }
+        return '';
       }
     });
     
@@ -996,6 +1076,28 @@ const downloadPopulatedTemplate = async (req, res) => {
     console.log(`🔧 Final template data prepared with ${Object.keys(finalCleanMap).length} fields`);
     console.log(`🔧 Sample final data:`, Object.entries(finalCleanMap).slice(0, 3));
 
+    // Extract and log all placeholders from the template for debugging
+    try {
+      const templateText = doc.getFullText();
+      const placeholderRegex = /\[([^\]]+)\]/g;
+      const foundPlaceholders = [];
+      let match;
+      while ((match = placeholderRegex.exec(templateText)) !== null) {
+        foundPlaceholders.push(match[1]);
+      }
+      console.log(`📋 Found ${foundPlaceholders.length} placeholders in template: ${template.template_path}`);
+      console.log(`📝 Placeholders:`, [...new Set(foundPlaceholders)].join(', '));
+      
+      // Check for unclosed brackets
+      const openBrackets = (templateText.match(/\[/g) || []).length;
+      const closeBrackets = (templateText.match(/\]/g) || []).length;
+      if (openBrackets !== closeBrackets) {
+        console.error(`⚠️ WARNING: Mismatched brackets in template! Open: ${openBrackets}, Close: ${closeBrackets}`);
+      }
+    } catch (extractError) {
+      console.warn('Could not extract placeholders for debugging:', extractError.message);
+    }
+    
     // Set the template variables with the final clean map
     doc.setData(finalCleanMap);
     
@@ -1008,14 +1110,30 @@ const downloadPopulatedTemplate = async (req, res) => {
       console.log('📋 Available values for mapping:', Object.keys(mappedTemplate.valueMap));
       console.log('📝 Template values:', mappedTemplate.valueMap);
       
-      // If there's an error, return the original template
-      const fileStream = require('fs').createReadStream(templatePath);
-      const filename = template.template_path.split('/').pop().replace('_Template.docx', '_Populated.docx');
-      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
-      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-      res.setHeader('Cache-Control', 'no-cache');
-      fileStream.pipe(res);
-      return;
+      // Enhanced error logging for docxtemplater
+      if (error.properties && error.properties.errors instanceof Array) {
+        const errorMessages = error.properties.errors.map((err) => {
+          return `${err.name}: ${err.message} at ${err.properties.explanation || 'unknown'}`;
+        }).join('\n');
+        console.error('🔍 Detailed template errors:\n', errorMessages);
+        
+        // Return detailed error to client
+        return res.status(500).json({
+          success: false,
+          message: 'Error downloading populated template',
+          error: 'Template has structural issues',
+          details: errorMessages,
+          templateName: template.template_path
+        });
+      }
+      
+      // Generic error handling
+      return res.status(500).json({
+        success: false,
+        message: 'Error downloading populated template',
+        error: error.message,
+        templateName: template.template_path
+      });
     }
     
     // Get the populated document as a buffer
