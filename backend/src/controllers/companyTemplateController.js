@@ -377,6 +377,8 @@ const mapCompanyValuesToTemplate = async (companyId, templatePath) => {
           const suffix = key.match(/c(\d+)$/)[1];
           const fieldKey = `Name as per PAN C${suffix}`;
           if (!valueMap[fieldKey]) valueMap[fieldKey] = cv.field_value;
+          if (!valueMap[`name_pan_c${suffix}`]) valueMap[`name_pan_c${suffix}`] = cv.field_value;
+          console.log(`✅ Mapped Name as per PAN C${suffix}: ${cv.field_value}`);
         }
         if (key.includes('name as per cml c') && key.match(/c\d+$/)) {
           const suffix = key.match(/c(\d+)$/)[1];
@@ -411,12 +413,20 @@ const mapCompanyValuesToTemplate = async (companyId, templatePath) => {
           if (!valueMap[`father_name_c${suffix}`]) valueMap[`father_name_c${suffix}`] = cv.field_value;
         }
         
-        // Handle address fields dynamically
+        // Handle address fields dynamically - CRITICAL FIX: Ensure Address C1 maps to claimant address, not bank address
         if (key.includes('address c') && key.match(/c\d+$/)) {
           const suffix = key.match(/c(\d+)$/)[1];
           const fieldKey = `Address C${suffix}`;
-          if (!valueMap[fieldKey]) valueMap[fieldKey] = cv.field_value;
-          if (!valueMap[`address_c${suffix}`]) valueMap[`address_c${suffix}`] = cv.field_value;
+          
+          // CRITICAL: Only map if this is NOT a bank address field
+          // Bank addresses should be mapped to "Bank Address C1", not "Address C1"
+          if (!key.includes('bank') && !key.includes('Bank')) {
+            if (!valueMap[fieldKey]) valueMap[fieldKey] = cv.field_value;
+            if (!valueMap[`address_c${suffix}`]) valueMap[`address_c${suffix}`] = cv.field_value;
+            console.log(`✅ Mapped claimant address for ${fieldKey}: ${cv.field_value}`);
+          } else {
+            console.log(`⚠️ Skipping bank address mapping for ${fieldKey}: ${cv.field_value}`);
+          }
         }
         
         // Handle PAN fields dynamically
@@ -535,10 +545,17 @@ const mapCompanyValuesToTemplate = async (companyId, templatePath) => {
         valueMap[`name_c${num}`] || valueMap[`Name as per Aadhar ${cnSuffix}`], 
         `Name as per Aadhar ${cnSuffix}`
       );
+      // CRITICAL FIX: Ensure Name as per PAN C1 field is properly mapped
+      const nameAsPerPanValue = valueMap[`Name as per PAN ${cnSuffix}`] || 
+                               valueMap[`name_as_per_pan_c${num}`] ||
+                               valueMap[`name_pan_c${num}`];
+      
       templateMappings[`Name as per PAN ${cnSuffix}`] = getValueOrPlaceholder(
-        valueMap[`Name as per PAN ${cnSuffix}`], 
+        nameAsPerPanValue, 
         `Name as per PAN ${cnSuffix}`
       );
+      
+      console.log(`🔍 Mapping Name as per PAN ${cnSuffix}: ${nameAsPerPanValue || 'NOT FOUND'}`);
       templateMappings[`Name as per CML ${cnSuffix}`] = getValueOrPlaceholder(
         valueMap[`Name as per CML ${cnSuffix}`], 
         `Name as per CML ${cnSuffix}`
@@ -591,8 +608,29 @@ const mapCompanyValuesToTemplate = async (companyId, templatePath) => {
         valueMap[`relation_c${num}`] || valueMap[`Deceased Relation ${cnSuffix}`], 
         `Deceased Relation ${cnSuffix}`
       );
+      // CRITICAL FIX: Ensure Address C1 maps to claimant address, not bank address
+      // First, try to find the correct claimant address
+      const claimantAddress = valueMap[`address_c${num}`] || 
+                             valueMap[`Address ${cnSuffix}`] ||
+                             valueMap[`claimant_address_c${num}`] ||
+                             valueMap[`residential_address_c${num}`];
+      
+      // Ensure we're not using bank address for claimant address field
+      const bankAddress = valueMap[`Bank Address ${cnSuffix}`] || 
+                         valueMap[`bank_address_c${num}`];
+      
+      let finalAddress = claimantAddress;
+      
+      // If claimant address is missing but bank address exists, log warning
+      if (!claimantAddress && bankAddress) {
+        console.log(`⚠️ WARNING: No claimant address found for ${cnSuffix}, but bank address exists: ${bankAddress}`);
+        console.log(`⚠️ This may cause the bank address to appear in the claimant address field!`);
+        // Don't use bank address for claimant address field
+        finalAddress = '';
+      }
+      
       templateMappings[`Address ${cnSuffix}`] = getValueOrPlaceholder(
-        valueMap[`address_c${num}`] || valueMap[`Address ${cnSuffix}`], 
+        finalAddress, 
         `Address ${cnSuffix}`
       );
       templateMappings[`PIN ${cnSuffix}`] = getValueOrPlaceholder(
@@ -735,6 +773,50 @@ const mapCompanyValuesToTemplate = async (companyId, templatePath) => {
     
     console.log(`✅ Company template undefined cleanup completed. Final valueMap has ${Object.keys(valueMap).length} entries`);
     
+    // CRITICAL FIX: Address mapping validation to prevent bank address in claimant address field
+    console.log('🔧 Starting address mapping validation to prevent bank address in claimant address field...');
+    
+    // Check for and fix address mapping issues
+    Object.keys(valueMap).forEach(key => {
+      if (key.includes('Address C') && !key.includes('Bank Address')) {
+        const value = valueMap[key];
+        
+        // Check if the address contains bank-related information
+        if (value && (
+          value.includes('HDFC') || 
+          value.includes('Bank') || 
+          value.includes('IFSC') || 
+          value.includes('Branch') ||
+          value.includes('Ambar Plaza') ||
+          value.includes('Station Road')
+        )) {
+          console.log(`🚨 CRITICAL: Found bank address in claimant address field [${key}]: ${value}`);
+          console.log(`🚨 This is the exact issue described in the screenshot!`);
+          
+          // Try to find the correct claimant address
+          const correctClaimantAddress = companyValues.find(cv => 
+            cv.caseField && 
+            cv.caseField.field_key === key && 
+            cv.field_value && 
+            !cv.field_value.includes('HDFC') &&
+            !cv.field_value.includes('Bank') &&
+            !cv.field_value.includes('IFSC') &&
+            !cv.field_value.includes('Branch') &&
+            !cv.field_value.includes('Ambar Plaza') &&
+            !cv.field_value.includes('Station Road')
+          );
+          
+          if (correctClaimantAddress) {
+            console.log(`✅ Found correct claimant address for ${key}: ${correctClaimantAddress.field_value}`);
+            valueMap[key] = correctClaimantAddress.field_value;
+          } else {
+            console.log(`❌ No correct claimant address found for ${key}, setting to empty`);
+            valueMap[key] = '';
+          }
+        }
+      }
+    });
+
     // MAJOR CLEANUP: Fix all mapping issues (same as case template controller)
     console.log('🔧 Starting comprehensive mapping cleanup for company templates...');
     

@@ -29,7 +29,7 @@ const generateCaseId = async () => {
 // Get all cases with optional filters
 const getAllCases = async (req, res) => {
   try {
-    const { status, assigned_to, created_by, page = 1, limit = 10 } = req.query;
+    const { status, assigned_to, created_by, page = 1, limit = 1000 } = req.query;
     
     const whereClause = {};
     if (status) whereClause.status = status;
