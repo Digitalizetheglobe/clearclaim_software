@@ -40,7 +40,7 @@ const getPlaceholderText = (key) => {
   return '_________________';
 };
 
-// Helper function to format dates in DD/MM/YY format
+// Helper function to format dates in DD/MM/YYYY format
 const formatDate = (dateValue) => {
   if (!dateValue) return '';
   
@@ -60,6 +60,13 @@ const formatDate = (dateValue) => {
         const [day, month, year] = dateValue.split('/');
         date = new Date(year, month - 1, day);
       }
+      // Handle DD/MM/YY format (2-digit year) and convert to 4-digit
+      else if (dateValue.match(/^\d{1,2}\/\d{1,2}\/\d{2}$/)) {
+        const [day, month, year] = dateValue.split('/');
+        // Convert 2-digit year to 4-digit (assume 20xx for years 00-99)
+        const fullYear = parseInt(year) < 50 ? 2000 + parseInt(year) : 1900 + parseInt(year);
+        date = new Date(fullYear, month - 1, day);
+      }
       // Handle other formats
       else {
         date = new Date(dateValue);
@@ -73,10 +80,10 @@ const formatDate = (dateValue) => {
       return '';
     }
     
-    // Format as DD/MM/YY
+    // Format as DD/MM/YYYY (4-digit year)
     const day = date.getDate().toString().padStart(2, '0');
     const month = (date.getMonth() + 1).toString().padStart(2, '0');
-    const year = date.getFullYear().toString().slice(-2); // Last 2 digits
+    const year = date.getFullYear().toString(); // Full 4-digit year
     
     return `${day}/${month}/${year}`;
   } catch (error) {

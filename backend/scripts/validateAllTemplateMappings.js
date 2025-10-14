@@ -199,3 +199,4 @@ validateAllTemplateMappings().then(() => {
   console.log(`${'='.repeat(60)}\n`);
   process.exit(0);
 });
+
