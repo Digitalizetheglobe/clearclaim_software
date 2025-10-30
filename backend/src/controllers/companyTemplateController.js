@@ -703,6 +703,63 @@ const mapCompanyValuesToTemplate = async (companyId, templatePath) => {
       );
     });
 
+    // Dynamically add mappings for Share Certificate fields (SC1-SC10)
+    // Find all unique SC numbers from the valueMap
+    const scNumbers = new Set();
+    Object.keys(valueMap).forEach(key => {
+      // Match SC, DN, NOS, SC Status, and Year of Purchase fields
+      const scMatch = key.match(/^SC(\d+)$/i) || 
+                      key.match(/^DN(\d+)$/i) || 
+                      key.match(/^NOS(\d+)$/i) || 
+                      key.match(/SC\s*Status(\d+)/i) ||
+                      key.match(/Year\s*of\s*Purchase(\d+)/i);
+      if (scMatch) {
+        scNumbers.add(scMatch[1]);
+      }
+    });
+
+    // Add mappings for each Share Certificate (SC1-SC10)
+    // For SC fields: if no data exists, use empty string (not placeholder) to avoid showing rows with placeholder text
+    for (let i = 1; i <= 10; i++) {
+      const scSuffix = i.toString();
+      
+      // Helper function to get SC value or empty string (not placeholder)
+      const getSCValueOrEmpty = (value) => {
+        if (!value || 
+            value === 'undefined' || 
+            value === 'null' || 
+            value === 'UNDEFINED' || 
+            value === 'NULL' ||
+            (typeof value === 'string' && value.trim() === '')) {
+          return ''; // Return empty string for SC fields when no data
+        }
+        const cleanedValue = value.toString().replace(/undefined|UNDEFINED|null|NULL/gi, '').trim();
+        return cleanedValue || '';
+      };
+      
+      // SC field
+      const scValue = valueMap[`SC${scSuffix}`] || valueMap[`sc${scSuffix}`];
+      templateMappings[`SC${scSuffix}`] = getSCValueOrEmpty(scValue);
+      
+      // DN (Distinctive Number) field
+      const dnValue = valueMap[`DN${scSuffix}`] || valueMap[`dn${scSuffix}`];
+      templateMappings[`DN${scSuffix}`] = getSCValueOrEmpty(dnValue);
+      
+      // NOS (Number of Securities) field
+      const nosValue = valueMap[`NOS${scSuffix}`] || valueMap[`nos${scSuffix}`];
+      templateMappings[`NOS${scSuffix}`] = getSCValueOrEmpty(nosValue);
+      
+      // SC Status field
+      const statusValue = valueMap[`SC Status${scSuffix}`] || valueMap[`sc_status${scSuffix}`];
+      templateMappings[`SC Status${scSuffix}`] = getSCValueOrEmpty(statusValue);
+      
+      // Year of Purchase - only for SC1
+      if (i === 1) {
+        const yopValue = valueMap[`Year of Purchase${scSuffix}`] || valueMap[`year_of_purchase${scSuffix}`];
+        templateMappings[`Year of Purchase${scSuffix}`] = getSCValueOrEmpty(yopValue);
+      }
+    }
+
     // Merge template mappings with valueMap
     Object.assign(valueMap, templateMappings);
     
