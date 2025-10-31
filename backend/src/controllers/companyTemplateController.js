@@ -175,82 +175,67 @@ const getCompanyTemplates = async (req, res) => {
     let templatesByCategory = {};
     let selectedCount = 0;
 
-    // If no templates exist for this company, scan the templates directory
-    if (allTemplates.length === 0) {
-      console.log(`No templates found for company ${companyId}, scanning templates directory...`);
+    // Always scan templates directory to sync with filesystem (for new templates like LH6-LH10)
+    console.log(`Scanning templates directory for company ${companyId} to sync with database...`);
+    
+    try {
+      // Scan templates directory
+      const templatesDir = path.join(__dirname, '../../templates');
+      const templateFiles = await fs.readdir(templatesDir);
+      const docxFiles = templateFiles.filter(file => file.endsWith('.docx') && !file.startsWith('~$'));
       
-      try {
-        // Scan templates directory
-        const templatesDir = path.join(__dirname, '../../templates');
-        const templateFiles = await fs.readdir(templatesDir);
-        const docxFiles = templateFiles.filter(file => file.endsWith('.docx'));
-        
-        console.log(`Found ${docxFiles.length} template files in directory`);
-        
-        // Create template records for this company
-        const templateRecords = [];
-        
-        for (const file of docxFiles) {
-          const category = categorizeTemplate(file);
-          const templateName = cleanTemplateName(file);
-          
-          templateRecords.push({
-            company_id: companyId,
-            template_name: templateName,
-            template_category: category,
-            template_path: file, // Store relative path
-            is_selected: false, // Default to not selected
-            selected_by: null,
-            selected_at: null
-          });
+      console.log(`Found ${docxFiles.length} template files in directory`);
+      
+      // Get existing template filenames from database
+      const existingTemplatePaths = new Set(allTemplates.map(t => t.template_path));
+      
+      // Find new templates that exist in filesystem but not in database
+      const newTemplateRecords = [];
+      
+      for (const file of docxFiles) {
+        // Skip if this template already exists in database
+        if (existingTemplatePaths.has(file)) {
+          continue;
         }
         
-        // Bulk create templates for this company
-        if (templateRecords.length > 0) {
-          await CompanyTemplate.bulkCreate(templateRecords);
-          console.log(`Created ${templateRecords.length} template records for company ${companyId}`);
-          
-          // Now fetch the newly created templates
-          const newTemplates = await CompanyTemplate.findAll({
-            where: { company_id: companyId },
-            include: [
-              {
-                model: User,
-                as: 'selectedByUser',
-                attributes: ['id', 'name', 'email']
-              }
-            ],
-            order: [['template_category', 'ASC'], ['template_name', 'ASC']]
-          });
-          
-          // Process the new templates
-          newTemplates.forEach(template => {
-            const category = template.template_category;
-            if (!templatesByCategory[category]) {
-              templatesByCategory[category] = [];
-            }
-            
-            templatesByCategory[category].push({
-              id: template.id,
-              name: template.template_name,
-              category: template.template_category,
-              filename: template.template_path.split('/').pop(),
-              isSelected: template.is_selected,
-              selectedBy: template.selectedByUser ? {
-                id: template.selectedByUser.id,
-                name: template.selectedByUser.name
-              } : null,
-              selectedAt: template.selected_at
-            });
-          });
-        }
-      } catch (dirError) {
-        console.error('Error scanning templates directory:', dirError);
-        // Continue with empty templates if directory scan fails
+        // This is a new template, add it to database
+        const category = categorizeTemplate(file);
+        const templateName = cleanTemplateName(file);
+        
+        console.log(`Adding new template to database: ${file} (category: ${category})`);
+        
+        newTemplateRecords.push({
+          company_id: companyId,
+          template_name: templateName,
+          template_category: category,
+          template_path: file, // Store relative path
+          is_selected: false, // Default to not selected
+          selected_by: null,
+          selected_at: null
+        });
       }
-    } else {
-      // Process existing templates
-      allTemplates.forEach(template => {
+      
+      // Bulk create new templates for this company
+      if (newTemplateRecords.length > 0) {
+        await CompanyTemplate.bulkCreate(newTemplateRecords);
+        console.log(`Created ${newTemplateRecords.length} new template records for company ${companyId}`);
+      }
+      
+      // Now fetch all templates (existing + newly added)
+      const updatedTemplates = await CompanyTemplate.findAll({
+        where: { company_id: companyId },
+        include: [
+          {
+            model: User,
+            as: 'selectedByUser',
+            attributes: ['id', 'name', 'email']
+          }
+        ],
+        order: [['template_category', 'ASC'], ['template_name', 'ASC']]
+      });
+      
+      // Process all templates (existing + newly added)
+      updatedTemplates.forEach(template => {
         const category = template.template_category;
         if (!templatesByCategory[category]) {
           templatesByCategory[category] = [];
@@ -260,7 +245,7 @@ const getCompanyTemplates = async (req, res) => {
           id: template.id,
           name: template.template_name,
           category: template.template_category,
-          filename: template.template_path.split('/').pop(), // Extract filename from path
+          filename: template.template_path.split('/').pop(),
           isSelected: template.is_selected,
           selectedBy: template.selectedByUser ? {
             id: template.selectedByUser.id,
@@ -271,6 +256,32 @@ const getCompanyTemplates = async (req, res) => {
       });
       
       // Count selected templates
+      selectedCount = updatedTemplates.filter(t => t.is_selected).length;
+      
+    } catch (dirError) {
+      console.error('Error scanning templates directory:', dirError);
+      
+      // Fallback to existing templates if directory scan fails
+      allTemplates.forEach(template => {
+        const category = template.template_category;
+        if (!templatesByCategory[category]) {
+          templatesByCategory[category] = [];
+        }
+        
+        templatesByCategory[category].push({
+          id: template.id,
+          name: template.template_name,
+          category: template.template_category,
+          filename: template.template_path.split('/').pop(),
+          isSelected: template.is_selected,
+          selectedBy: template.selectedByUser ? {
+            id: template.selectedByUser.id,
+            name: template.selectedByUser.name
+          } : null,
+          selectedAt: template.selected_at
+        });
+      });
+      
       selectedCount = allTemplates.filter(t => t.is_selected).length;
     }
 
@@ -519,6 +530,11 @@ const mapCompanyValuesToTemplate = async (companyId, templatePath) => {
           if (!valueMap['Total Shares']) valueMap['Total Shares'] = cv.field_value;
           if (!valueMap['total_shares']) valueMap['total_shares'] = cv.field_value;
         }
+        // Handle Date of Issue field
+        if (key === 'date of issue' || key === 'date_of_issue' || key.includes('date of issue')) {
+          if (!valueMap['Date of Issue']) valueMap['Date of Issue'] = cv.field_value;
+          if (!valueMap['date_of_issue']) valueMap['date_of_issue'] = cv.field_value;
+        }
       }
     });
 
@@ -528,7 +544,8 @@ const mapCompanyValuesToTemplate = async (companyId, templatePath) => {
       'Company Name': getValueOrPlaceholder(valueMap['company_name'] || valueMap['Company Name'], 'Company Name'),
       'Folio No': getValueOrPlaceholder(valueMap['folio_no'] || valueMap['Folio No'], 'Folio No'),
       'Total Shares': getValueOrPlaceholder(valueMap['total_shares'] || valueMap['Total Shares'], 'Total Shares'),
-      'Date of Issue': getValueOrPlaceholder(valueMap['date_of_issue'] || valueMap['Date of Issue'] || new Date(), 'Date of Issue'),
+      // Date of Issue should ONLY come from database, not current date
+      'Date of Issue': getValueOrPlaceholder(valueMap['date_of_issue'] || valueMap['Date of Issue'], 'Date of Issue'),
       'Current Date': formatDate(new Date()),
       'Today Date': formatDate(new Date())
     };

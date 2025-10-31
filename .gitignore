@@ -1,0 +1,13 @@
+# Ignore clearclaim_software_fe directory
+clearclaim_software_fe/
+
+# Common ignores
+node_modules/
+.DS_Store
+.env
+*.log
+dist/
+build/
+.vscode/
+.idea/
+
