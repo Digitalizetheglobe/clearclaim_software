@@ -367,21 +367,71 @@ const mapCompanyValuesToTemplate = async (companyId, templatePath) => {
     });
 
     console.log(`📊 Found ${companyValues.length} company values`);
+    
+    // Log all company values for debugging
+    console.log(`📋 All company values:`, companyValues.map(cv => ({
+      key: cv.caseField?.field_key,
+      label: cv.caseField?.field_label,
+      value: cv.field_value
+    })));
 
     // Create a mapping object for easy lookup
     const valueMap = {};
+    const allNameFields = {}; // Store all name fields for fallback (C fields)
+    const allHFields = {}; // Store all H fields for fallback
+    
     companyValues.forEach(cv => {
       if (cv.caseField && cv.field_value) {
         console.log(`📝 Mapping: ${cv.caseField.field_key} = "${cv.field_value}"`);
         
-        // Map by field key
+        // Map by field key (exact match)
         valueMap[cv.caseField.field_key] = cv.field_value;
-        // Map by field label
+        // Map by field label (exact match)
         valueMap[cv.caseField.field_label] = cv.field_value;
         
-        // Create additional mappings for common variations
+        // Store all name fields for fallback
         const key = cv.caseField.field_key.toLowerCase();
         const label = cv.caseField.field_label.toLowerCase();
+        
+        // If this is any kind of name field with C, store it for fallback
+        // Check both field_key and field_label
+        const hasCInKey = key.includes('name') && (key.match(/c\d+$/i) || key.match(/c\s*\d+/i));
+        const hasCInLabel = label.includes('name') && (label.match(/c\d+$/i) || label.match(/c\s*\d+/i));
+        
+        if (hasCInKey || hasCInLabel) {
+          const cMatch = key.match(/c\s*(\d+)/i) || label.match(/c\s*(\d+)/i);
+          if (cMatch) {
+            const cNum = cMatch[1];
+            if (!allNameFields[`c${cNum}`]) allNameFields[`c${cNum}`] = [];
+            allNameFields[`c${cNum}`].push({
+              key: cv.caseField.field_key,
+              label: cv.caseField.field_label,
+              value: cv.field_value
+            });
+            console.log(`📝 Stored name field for C${cNum}: ${cv.caseField.field_key} = "${cv.field_value}"`);
+          }
+        }
+        
+        // If this is any kind of name field with H, store it for fallback
+        // Check both field_key and field_label
+        const hasHInKey = key.includes('name') && (key.match(/h\d+$/i) || key.match(/h\s*\d+/i));
+        const hasHInLabel = label.includes('name') && (label.match(/h\d+$/i) || label.match(/h\s*\d+/i));
+        
+        if (hasHInKey || hasHInLabel) {
+          const hMatch = key.match(/h\s*(\d+)/i) || label.match(/h\s*(\d+)/i);
+          if (hMatch) {
+            const hNum = hMatch[1];
+            if (!allHFields[`h${hNum}`]) allHFields[`h${hNum}`] = [];
+            allHFields[`h${hNum}`].push({
+              key: cv.caseField.field_key,
+              label: cv.caseField.field_label,
+              value: cv.field_value
+            });
+            console.log(`📝 Stored name field for H${hNum}: ${cv.caseField.field_key} = "${cv.field_value}"`);
+          }
+        }
+        
+        // Create additional mappings for common variations
         
         // Map common variations - be more specific to avoid overwriting
         // Handle C1, C2, C3, and dynamic joint holders (C4, C5, C6, etc.)
@@ -391,12 +441,28 @@ const mapCompanyValuesToTemplate = async (companyId, templatePath) => {
           if (!valueMap[fieldKey]) valueMap[fieldKey] = cv.field_value;
           if (!valueMap[`name_c${suffix}`]) valueMap[`name_c${suffix}`] = cv.field_value;
         }
-        if (key.includes('name as per pan c') && key.match(/c\d+$/)) {
-          const suffix = key.match(/c(\d+)$/)[1];
+        // Handle "Name as per PAN C1" with multiple variations
+        // Check both field_key and field_label for "name as per pan"
+        const isNameAsPerPan = (key.includes('name as per pan') || key.includes('name_as_per_pan') || 
+                                label.includes('name as per pan') || label.includes('name_as_per_pan'));
+        
+        // Match patterns like "c1", "c 1", "C1", "C 1" at the end or in the middle
+        const panMatch = key.match(/c\s*(\d+)/i) || label.match(/c\s*(\d+)/i) || 
+                           cv.caseField.field_key.match(/c\s*(\d+)/i) || 
+                           cv.caseField.field_label.match(/c\s*(\d+)/i);
+        
+        if (isNameAsPerPan && panMatch) {
+          const suffix = panMatch[1];
           const fieldKey = `Name as per PAN C${suffix}`;
+          
+          // Map to all possible variations
           if (!valueMap[fieldKey]) valueMap[fieldKey] = cv.field_value;
           if (!valueMap[`name_pan_c${suffix}`]) valueMap[`name_pan_c${suffix}`] = cv.field_value;
-          console.log(`✅ Mapped Name as per PAN C${suffix}: ${cv.field_value}`);
+          if (!valueMap[`name_as_per_pan_c${suffix}`]) valueMap[`name_as_per_pan_c${suffix}`] = cv.field_value;
+          if (!valueMap[`Name as per PAN C${suffix}`]) valueMap[`Name as per PAN C${suffix}`] = cv.field_value;
+          if (!valueMap[`Name As Per PAN C${suffix}`]) valueMap[`Name As Per PAN C${suffix}`] = cv.field_value;
+          
+          console.log(`✅ Mapped Name as per PAN C${suffix} from key "${cv.caseField.field_key}" (label: "${cv.caseField.field_label}"): ${cv.field_value}`);
         }
         if (key.includes('name as per cml c') && key.match(/c\d+$/)) {
           const suffix = key.match(/c(\d+)$/)[1];
@@ -422,6 +488,34 @@ const mapCompanyValuesToTemplate = async (companyId, templatePath) => {
           const suffix = key.match(/c(\d+)$/)[1];
           const fieldKey = `Name as per Cert C${suffix}`;
           if (!valueMap[fieldKey]) valueMap[fieldKey] = cv.field_value;
+        }
+        
+        // Handle H fields (H1, H2, H3, H4) for deceased/holder names
+        // Name as per Certificate H3
+        if ((key.includes('name as per cert') || key.includes('name as per certificate')) && key.match(/h\d+$/i)) {
+          const suffix = key.match(/h(\d+)$/i)[1];
+          const fieldKey = `Name as per Certificate H${suffix}`;
+          if (!valueMap[fieldKey]) valueMap[fieldKey] = cv.field_value;
+          if (!valueMap[`name_cert_h${suffix}`]) valueMap[`name_cert_h${suffix}`] = cv.field_value;
+          console.log(`✅ Mapped Name as per Certificate H${suffix} from key "${cv.caseField.field_key}": ${cv.field_value}`);
+        }
+        
+        // Name as per DC H3 (Death Certificate)
+        if ((key.includes('name as per dc') || key.includes('name as per death') || key.includes('death certificate')) && key.match(/h\d+$/i)) {
+          const suffix = key.match(/h(\d+)$/i)[1];
+          const fieldKey = `Name as per DC H${suffix}`;
+          if (!valueMap[fieldKey]) valueMap[fieldKey] = cv.field_value;
+          if (!valueMap[`name_dc_h${suffix}`]) valueMap[`name_dc_h${suffix}`] = cv.field_value;
+          console.log(`✅ Mapped Name as per DC H${suffix} from key "${cv.caseField.field_key}": ${cv.field_value}`);
+        }
+        
+        // Claimant Relation H3
+        if ((key.includes('claimant relation') || key.includes('relation')) && key.match(/h\d+$/i)) {
+          const suffix = key.match(/h(\d+)$/i)[1];
+          const fieldKey = `Claimant Relation H${suffix}`;
+          if (!valueMap[fieldKey]) valueMap[fieldKey] = cv.field_value;
+          if (!valueMap[`claimant_relation_h${suffix}`]) valueMap[`claimant_relation_h${suffix}`] = cv.field_value;
+          console.log(`✅ Mapped Claimant Relation H${suffix} from key "${cv.caseField.field_key}": ${cv.field_value}`);
         }
         // Handle father name fields dynamically
         if (key.includes('father name c') && key.match(/c\d+$/)) {
@@ -504,11 +598,20 @@ const mapCompanyValuesToTemplate = async (companyId, templatePath) => {
         }
         
         // Handle PIN fields dynamically
+        // CRITICAL FIX: Ensure PIN C1 maps to claimant PIN, not bank PIN
         if (key.includes('pin c') && key.match(/c\d+$/)) {
           const suffix = key.match(/c(\d+)$/)[1];
           const fieldKey = `PIN C${suffix}`;
-          if (!valueMap[fieldKey]) valueMap[fieldKey] = cv.field_value;
-          if (!valueMap[`pin_c${suffix}`]) valueMap[`pin_c${suffix}`] = cv.field_value;
+          
+          // CRITICAL: Only map if this is NOT a bank PIN field
+          // Bank PIN should be mapped to "Bank PIN C1", not "PIN C1"
+          if (!key.includes('bank') && !key.includes('Bank')) {
+            if (!valueMap[fieldKey]) valueMap[fieldKey] = cv.field_value;
+            if (!valueMap[`pin_c${suffix}`]) valueMap[`pin_c${suffix}`] = cv.field_value;
+            console.log(`✅ Mapped claimant PIN for ${fieldKey}: ${cv.field_value}`);
+          } else {
+            console.log(`⚠️ Skipping bank PIN mapping for ${fieldKey}: ${cv.field_value}`);
+          }
         }
         
         // Handle old address fields dynamically
@@ -551,10 +654,17 @@ const mapCompanyValuesToTemplate = async (companyId, templatePath) => {
     };
 
     // Dynamically add mappings for all joint holders (C1, C2, C3, C4, C5, etc.)
-    // Find all unique joint holder numbers from the valueMap
+    // Find all unique joint holder numbers from the valueMap and allNameFields
     const jointHolderNumbers = new Set();
     Object.keys(valueMap).forEach(key => {
       const match = key.match(/[cC](\d+)$/);
+      if (match) {
+        jointHolderNumbers.add(match[1]);
+      }
+    });
+    // Also add from allNameFields
+    Object.keys(allNameFields).forEach(key => {
+      const match = key.match(/c(\d+)/);
       if (match) {
         jointHolderNumbers.add(match[1]);
       }
@@ -570,16 +680,82 @@ const mapCompanyValuesToTemplate = async (companyId, templatePath) => {
         `Name as per Aadhar ${cnSuffix}`
       );
       // CRITICAL FIX: Ensure Name as per PAN C1 field is properly mapped
-      const nameAsPerPanValue = valueMap[`Name as per PAN ${cnSuffix}`] || 
+      // Check multiple variations of the field name
+      let nameAsPerPanValue = valueMap[`Name as per PAN ${cnSuffix}`] || 
                                valueMap[`name_as_per_pan_c${num}`] ||
-                               valueMap[`name_pan_c${num}`];
+                               valueMap[`name_pan_c${num}`] ||
+                               valueMap[`Name as per PAN C${num}`] ||
+                               valueMap[`name as per pan c${num}`] ||
+                               valueMap[`Name As Per PAN ${cnSuffix}`] ||
+                               valueMap[`Name As Per Pan ${cnSuffix}`];
+      
+      // AGGRESSIVE FALLBACK: If still not found, check ALL name fields for this C number
+      if (!nameAsPerPanValue || nameAsPerPanValue === '_________________' || !nameAsPerPanValue.trim()) {
+        console.log(`⚠️ WARNING: Name as per PAN ${cnSuffix} not found, checking all name fields for C${num}...`);
+        
+        // Check all stored name fields for this C number
+        const availableNames = allNameFields[`c${num}`] || [];
+        console.log(`🔍 Found ${availableNames.length} name fields for C${num}:`, availableNames.map(n => `${n.key} (${n.label}): ${n.value}`));
+        
+        // Try to find PAN name first
+        const panName = availableNames.find(n => 
+          (n.key.toLowerCase().includes('pan') || n.label.toLowerCase().includes('pan')) &&
+          n.value && n.value.trim() !== ''
+        );
+        
+        if (panName) {
+          nameAsPerPanValue = panName.value;
+          console.log(`✅ Found PAN name from field "${panName.key}" (label: "${panName.label}"): ${panName.value}`);
+        } else {
+          // Fallback to any name field (Aadhar, CML, Bank, etc.) - prioritize Aadhar
+          const aadharName = availableNames.find(n => 
+            (n.key.toLowerCase().includes('aadhar') || n.label.toLowerCase().includes('aadhar')) &&
+            n.value && n.value.trim() !== ''
+          );
+          
+          if (aadharName) {
+            nameAsPerPanValue = aadharName.value;
+            console.log(`✅ Using Aadhar name as fallback from field "${aadharName.key}" (label: "${aadharName.label}"): ${aadharName.value}`);
+          } else {
+            // Use ANY name field that has a value
+            const anyName = availableNames.find(n => n.value && n.value.trim() !== '' && n.value !== 'undefined' && n.value !== 'null');
+            if (anyName) {
+              nameAsPerPanValue = anyName.value;
+              console.log(`✅ Using ANY available name as fallback from field "${anyName.key}" (label: "${anyName.label}"): ${anyName.value}`);
+            } else {
+              // Last resort: try valueMap with any name variation - check ALL possible keys
+              console.log(`🔍 Last resort: Checking valueMap for any C${num} name fields...`);
+              const allPossibleKeys = [
+                `name_c${num}`, `Name as per Aadhar ${cnSuffix}`, `Name as per CML ${cnSuffix}`, 
+                `Name as per Bank ${cnSuffix}`, `Name as per Passport ${cnSuffix}`,
+                `name_aadhar_c${num}`, `name_cml_c${num}`, `name_bank_c${num}`
+              ];
+              
+              for (const possibleKey of allPossibleKeys) {
+                if (valueMap[possibleKey] && valueMap[possibleKey].trim() !== '') {
+                  nameAsPerPanValue = valueMap[possibleKey];
+                  console.log(`✅ Found name in valueMap with key "${possibleKey}": ${nameAsPerPanValue}`);
+                  break;
+                }
+              }
+            }
+          }
+        }
+      }
+      
+      // Final check - if still empty, log all available fields for debugging
+      if (!nameAsPerPanValue || nameAsPerPanValue === '_________________' || !nameAsPerPanValue.trim()) {
+        console.log(`❌ ERROR: Name as per PAN ${cnSuffix} is STILL empty after all fallbacks!`);
+        console.log(`📋 All available fields for C${num}:`, Object.keys(valueMap).filter(k => k.toLowerCase().includes('name') && (k.includes(`c${num}`) || k.includes(cnSuffix))));
+        console.log(`📋 All stored name fields:`, allNameFields[`c${num}`]);
+      }
       
       templateMappings[`Name as per PAN ${cnSuffix}`] = getValueOrPlaceholder(
         nameAsPerPanValue, 
         `Name as per PAN ${cnSuffix}`
       );
       
-      console.log(`🔍 Mapping Name as per PAN ${cnSuffix}: ${nameAsPerPanValue || 'NOT FOUND'}`);
+      console.log(`🔍 Final mapping for Name as per PAN ${cnSuffix}: "${nameAsPerPanValue || 'NOT FOUND'}"`);
       templateMappings[`Name as per CML ${cnSuffix}`] = getValueOrPlaceholder(
         valueMap[`Name as per CML ${cnSuffix}`], 
         `Name as per CML ${cnSuffix}`
@@ -657,8 +833,29 @@ const mapCompanyValuesToTemplate = async (companyId, templatePath) => {
         finalAddress, 
         `Address ${cnSuffix}`
       );
+      // CRITICAL FIX: Ensure PIN C1 maps to claimant PIN, not bank PIN
+      // First, try to find the correct claimant PIN
+      const claimantPin = valueMap[`pin_c${num}`] || 
+                         valueMap[`PIN ${cnSuffix}`] ||
+                         valueMap[`claimant_pin_c${num}`] ||
+                         valueMap[`residential_pin_c${num}`];
+      
+      // Ensure we're not using bank PIN for claimant PIN field
+      const bankPin = valueMap[`Bank PIN ${cnSuffix}`] || 
+                     valueMap[`bank_pin_c${num}`];
+      
+      let finalPin = claimantPin;
+      
+      // If claimant PIN is missing but bank PIN exists, log warning
+      if (!claimantPin && bankPin) {
+        console.log(`⚠️ WARNING: No claimant PIN found for ${cnSuffix}, but bank PIN exists: ${bankPin}`);
+        console.log(`⚠️ This may cause the bank PIN to appear in the claimant PIN field!`);
+        // Don't use bank PIN for claimant PIN field
+        finalPin = '';
+      }
+      
       templateMappings[`PIN ${cnSuffix}`] = getValueOrPlaceholder(
-        valueMap[`pin_c${num}`] || valueMap[`PIN ${cnSuffix}`], 
+        finalPin, 
         `PIN ${cnSuffix}`
       );
       templateMappings[`Old Address ${cnSuffix}`] = getValueOrPlaceholder(
@@ -717,6 +914,108 @@ const mapCompanyValuesToTemplate = async (companyId, templatePath) => {
       templateMappings[`DEMAT AC ${cnSuffix}`] = getValueOrPlaceholder(
         valueMap[`DEMAT AC ${cnSuffix}`], 
         `DEMAT AC ${cnSuffix}`
+      );
+    });
+
+    // Dynamically add mappings for H fields (H1, H2, H3, H4) - deceased/holder names
+    // Find all unique H numbers from the valueMap and allHFields
+    const holderNumbers = new Set();
+    Object.keys(valueMap).forEach(key => {
+      const match = key.match(/[hH](\d+)$/);
+      if (match) {
+        holderNumbers.add(match[1]);
+      }
+    });
+    // Also add from allHFields
+    Object.keys(allHFields).forEach(key => {
+      const match = key.match(/h(\d+)/);
+      if (match) {
+        holderNumbers.add(match[1]);
+      }
+    });
+
+    // Add mappings for each holder (H1, H2, H3, H4, etc.)
+    holderNumbers.forEach(num => {
+      const hnSuffix = `H${num}`;
+      
+      // Name as per Certificate H3 - with aggressive fallback
+      let certName = valueMap[`Name as per Certificate ${hnSuffix}`] || 
+                     valueMap[`name_cert_h${num}`] ||
+                     valueMap[`name as per cert h${num}`] ||
+                     valueMap[`name as per certificate h${num}`];
+      
+      // AGGRESSIVE FALLBACK: If not found, check all H fields
+      if (!certName || certName === '_________________') {
+        const availableHNames = allHFields[`h${num}`] || [];
+        console.log(`🔍 Found ${availableHNames.length} name fields for H${num}:`, availableHNames.map(n => `${n.key}: ${n.value}`));
+        
+        // Try to find certificate name
+        const certNameField = availableHNames.find(n => 
+          (n.key.toLowerCase().includes('cert') || n.key.toLowerCase().includes('certificate')) &&
+          !n.key.toLowerCase().includes('dc') && !n.key.toLowerCase().includes('death')
+        );
+        
+        if (certNameField) {
+          certName = certNameField.value;
+          console.log(`✅ Found Certificate name from field "${certNameField.key}": ${certNameField.value}`);
+        } else {
+          // Fallback to any name field
+          const anyName = availableHNames.find(n => n.value && n.value.trim() !== '');
+          if (anyName) {
+            certName = anyName.value;
+            console.log(`✅ Using fallback name for Certificate H${num} from field "${anyName.key}": ${anyName.value}`);
+          }
+        }
+      }
+      
+      templateMappings[`Name as per Certificate ${hnSuffix}`] = getValueOrPlaceholder(
+        certName,
+        `Name as per Certificate ${hnSuffix}`
+      );
+      
+      // Name as per DC H3 (Death Certificate) - with aggressive fallback
+      let dcName = valueMap[`Name as per DC ${hnSuffix}`] || 
+                   valueMap[`name_dc_h${num}`] ||
+                   valueMap[`name as per dc h${num}`] ||
+                   valueMap[`name as per death certificate h${num}`] ||
+                   valueMap[`death_certificate_h${num}`];
+      
+      // AGGRESSIVE FALLBACK: If not found, check all H fields
+      if (!dcName || dcName === '_________________') {
+        const availableHNames = allHFields[`h${num}`] || [];
+        
+        // Try to find DC/death certificate name
+        const dcNameField = availableHNames.find(n => 
+          n.key.toLowerCase().includes('dc') || 
+          n.key.toLowerCase().includes('death') ||
+          n.label.toLowerCase().includes('dc') ||
+          n.label.toLowerCase().includes('death')
+        );
+        
+        if (dcNameField) {
+          dcName = dcNameField.value;
+          console.log(`✅ Found DC name from field "${dcNameField.key}": ${dcNameField.value}`);
+        } else {
+          // Fallback to any name field
+          const anyName = availableHNames.find(n => n.value && n.value.trim() !== '');
+          if (anyName) {
+            dcName = anyName.value;
+            console.log(`✅ Using fallback name for DC H${num} from field "${anyName.key}": ${anyName.value}`);
+          }
+        }
+      }
+      
+      templateMappings[`Name as per DC ${hnSuffix}`] = getValueOrPlaceholder(
+        dcName,
+        `Name as per DC ${hnSuffix}`
+      );
+      
+      // Claimant Relation H3
+      templateMappings[`Claimant Relation ${hnSuffix}`] = getValueOrPlaceholder(
+        valueMap[`Claimant Relation ${hnSuffix}`] || 
+        valueMap[`claimant_relation_h${num}`] ||
+        valueMap[`relation_h${num}`],
+        `Claimant Relation ${hnSuffix}`
       );
     });
 
@@ -892,6 +1191,40 @@ const mapCompanyValuesToTemplate = async (companyId, templatePath) => {
             valueMap[key] = correctClaimantAddress.field_value;
           } else {
             console.log(`❌ No correct claimant address found for ${key}, setting to empty`);
+            valueMap[key] = '';
+          }
+        }
+      }
+    });
+
+    // Check for and fix PIN mapping issues
+    Object.keys(valueMap).forEach(key => {
+      if (key.includes('PIN C') && !key.includes('Bank PIN')) {
+        const value = valueMap[key];
+        
+        // Check if the PIN matches Bank PIN (common issue where bank PIN gets mapped to claimant PIN)
+        const bankPinKey = key.replace('PIN C', 'Bank PIN C');
+        const bankPinValue = valueMap[bankPinKey];
+        
+        if (bankPinValue && value === bankPinValue) {
+          console.log(`🚨 CRITICAL: Found bank PIN in claimant PIN field [${key}]: ${value}`);
+          console.log(`🚨 Bank PIN value matches claimant PIN - this is the mapping issue!`);
+          
+          // Try to find the correct claimant PIN
+          const correctClaimantPin = companyValues.find(cv => 
+            cv.caseField && 
+            (cv.caseField.field_key.toLowerCase().includes('pin c') || 
+             cv.caseField.field_key === `PIN ${key.match(/C\d+/)[0]}`) &&
+            cv.field_value && 
+            cv.field_value !== bankPinValue && // Ensure it's different from bank PIN
+            !cv.caseField.field_key.toLowerCase().includes('bank')
+          );
+          
+          if (correctClaimantPin) {
+            console.log(`✅ Found correct claimant PIN for ${key}: ${correctClaimantPin.field_value}`);
+            valueMap[key] = correctClaimantPin.field_value;
+          } else {
+            console.log(`❌ No correct claimant PIN found for ${key}, setting to empty`);
             valueMap[key] = '';
           }
         }
