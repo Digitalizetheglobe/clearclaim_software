@@ -237,8 +237,53 @@ const caseFieldsData = [
   { field_key: 'Relation LH5', field_label: 'Relation LH5', field_type: 'text', field_category: 'legal_heir_info', display_order: 201 },
   { field_key: 'Age LH5', field_label: 'Age LH5', field_type: 'number', field_category: 'legal_heir_info', display_order: 202 },
 
+  { field_key: 'Name as per Aadhar LH6', field_label: 'Name as per Aadhar LH6', field_type: 'text', field_category: 'legal_heir_info', display_order: 203 },
+  { field_key: 'Name as per PAN LH6', field_label: 'Name as per PAN LH6', field_type: 'text', field_category: 'legal_heir_info', display_order: 204 },
+  { field_key: 'Name as per Succession/Will LH6', field_label: 'Name as per Succession/Will LH6', field_type: 'text', field_category: 'legal_heir_info', display_order: 205 },
+  { field_key: 'Father Name LH6', field_label: 'Father Name LH6', field_type: 'text', field_category: 'legal_heir_info', display_order: 206 },
+  { field_key: 'Address LH6', field_label: 'Address LH6', field_type: 'text', field_category: 'legal_heir_info', display_order: 207 },
+  { field_key: 'Mobile No LH6', field_label: 'Mobile No LH6', field_type: 'phone', field_category: 'legal_heir_info', display_order: 208 },
+  { field_key: 'Relation LH6', field_label: 'Relation LH6', field_type: 'text', field_category: 'legal_heir_info', display_order: 209 },
+  { field_key: 'Age LH6', field_label: 'Age LH6', field_type: 'number', field_category: 'legal_heir_info', display_order: 210 },
+
+  { field_key: 'Name as per Aadhar LH7', field_label: 'Name as per Aadhar LH7', field_type: 'text', field_category: 'legal_heir_info', display_order: 211 },
+  { field_key: 'Name as per PAN LH7', field_label: 'Name as per PAN LH7', field_type: 'text', field_category: 'legal_heir_info', display_order: 212 },
+  { field_key: 'Name as per Succession/Will LH7', field_label: 'Name as per Succession/Will LH7', field_type: 'text', field_category: 'legal_heir_info', display_order: 213 },
+  { field_key: 'Father Name LH7', field_label: 'Father Name LH7', field_type: 'text', field_category: 'legal_heir_info', display_order: 214 },
+  { field_key: 'Address LH7', field_label: 'Address LH7', field_type: 'text', field_category: 'legal_heir_info', display_order: 215 },
+  { field_key: 'Mobile No LH7', field_label: 'Mobile No LH7', field_type: 'phone', field_category: 'legal_heir_info', display_order: 216 },
+  { field_key: 'Relation LH7', field_label: 'Relation LH7', field_type: 'text', field_category: 'legal_heir_info', display_order: 217 },
+  { field_key: 'Age LH7', field_label: 'Age LH7', field_type: 'number', field_category: 'legal_heir_info', display_order: 218 },
+
+  { field_key: 'Name as per Aadhar LH8', field_label: 'Name as per Aadhar LH8', field_type: 'text', field_category: 'legal_heir_info', display_order: 219 },
+  { field_key: 'Name as per PAN LH8', field_label: 'Name as per PAN LH8', field_type: 'text', field_category: 'legal_heir_info', display_order: 220 },
+  { field_key: 'Name as per Succession/Will LH8', field_label: 'Name as per Succession/Will LH8', field_type: 'text', field_category: 'legal_heir_info', display_order: 221 },
+  { field_key: 'Father Name LH8', field_label: 'Father Name LH8', field_type: 'text', field_category: 'legal_heir_info', display_order: 222 },
+  { field_key: 'Address LH8', field_label: 'Address LH8', field_type: 'text', field_category: 'legal_heir_info', display_order: 223 },
+  { field_key: 'Mobile No LH8', field_label: 'Mobile No LH8', field_type: 'phone', field_category: 'legal_heir_info', display_order: 224 },
+  { field_key: 'Relation LH8', field_label: 'Relation LH8', field_type: 'text', field_category: 'legal_heir_info', display_order: 225 },
+  { field_key: 'Age LH8', field_label: 'Age LH8', field_type: 'number', field_category: 'legal_heir_info', display_order: 226 },
+
+  { field_key: 'Name as per Aadhar LH9', field_label: 'Name as per Aadhar LH9', field_type: 'text', field_category: 'legal_heir_info', display_order: 227 },
+  { field_key: 'Name as per PAN LH9', field_label: 'Name as per PAN LH9', field_type: 'text', field_category: 'legal_heir_info', display_order: 228 },
+  { field_key: 'Name as per Succession/Will LH9', field_label: 'Name as per Succession/Will LH9', field_type: 'text', field_category: 'legal_heir_info', display_order: 229 },
+  { field_key: 'Father Name LH9', field_label: 'Father Name LH9', field_type: 'text', field_category: 'legal_heir_info', display_order: 230 },
+  { field_key: 'Address LH9', field_label: 'Address LH9', field_type: 'text', field_category: 'legal_heir_info', display_order: 231 },
+  { field_key: 'Mobile No LH9', field_label: 'Mobile No LH9', field_type: 'phone', field_category: 'legal_heir_info', display_order: 232 },
+  { field_key: 'Relation LH9', field_label: 'Relation LH9', field_type: 'text', field_category: 'legal_heir_info', display_order: 233 },
+  { field_key: 'Age LH9', field_label: 'Age LH9', field_type: 'number', field_category: 'legal_heir_info', display_order: 234 },
+
+  { field_key: 'Name as per Aadhar LH10', field_label: 'Name as per Aadhar LH10', field_type: 'text', field_category: 'legal_heir_info', display_order: 235 },
+  { field_key: 'Name as per PAN LH10', field_label: 'Name as per PAN LH10', field_type: 'text', field_category: 'legal_heir_info', display_order: 236 },
+  { field_key: 'Name as per Succession/Will LH10', field_label: 'Name as per Succession/Will LH10', field_type: 'text', field_category: 'legal_heir_info', display_order: 237 },
+  { field_key: 'Father Name LH10', field_label: 'Father Name LH10', field_type: 'text', field_category: 'legal_heir_info', display_order: 238 },
+  { field_key: 'Address LH10', field_label: 'Address LH10', field_type: 'text', field_category: 'legal_heir_info', display_order: 239 },
+  { field_key: 'Mobile No LH10', field_label: 'Mobile No LH10', field_type: 'phone', field_category: 'legal_heir_info', display_order: 240 },
+  { field_key: 'Relation LH10', field_label: 'Relation LH10', field_type: 'text', field_category: 'legal_heir_info', display_order: 241 },
+  { field_key: 'Age LH10', field_label: 'Age LH10', field_type: 'number', field_category: 'legal_heir_info', display_order: 242 },
+
   // Additional Information
-  { field_key: 'Date of Issue', field_label: 'Date of Issue', field_type: 'date', field_category: 'additional_info', display_order: 203 }
+  { field_key: 'Date of Issue', field_label: 'Date of Issue', field_type: 'date', field_category: 'additional_info', display_order: 243 }
 ];
 
 async function populateCaseFields() {
