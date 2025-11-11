@@ -451,18 +451,50 @@ const mapCompanyValuesToTemplate = async (companyId, templatePath) => {
                            cv.caseField.field_key.match(/c\s*(\d+)/i) || 
                            cv.caseField.field_label.match(/c\s*(\d+)/i);
         
-        if (isNameAsPerPan && panMatch) {
-          const suffix = panMatch[1];
-          const fieldKey = `Name as per PAN C${suffix}`;
-          
-          // Map to all possible variations
-          if (!valueMap[fieldKey]) valueMap[fieldKey] = cv.field_value;
-          if (!valueMap[`name_pan_c${suffix}`]) valueMap[`name_pan_c${suffix}`] = cv.field_value;
-          if (!valueMap[`name_as_per_pan_c${suffix}`]) valueMap[`name_as_per_pan_c${suffix}`] = cv.field_value;
-          if (!valueMap[`Name as per PAN C${suffix}`]) valueMap[`Name as per PAN C${suffix}`] = cv.field_value;
-          if (!valueMap[`Name As Per PAN C${suffix}`]) valueMap[`Name As Per PAN C${suffix}`] = cv.field_value;
-          
-          console.log(`✅ Mapped Name as per PAN C${suffix} from key "${cv.caseField.field_key}" (label: "${cv.caseField.field_label}"): ${cv.field_value}`);
+        if (isNameAsPerPan) {
+          if (panMatch) {
+            // Has C number suffix (e.g., "Name as per PAN C1")
+            const suffix = panMatch[1];
+            const fieldKey = `Name as per PAN C${suffix}`;
+            
+            // Map to all possible variations (case-insensitive and with/without spaces)
+            const variations = [
+              fieldKey, // "Name as per PAN C1"
+              `name_pan_c${suffix}`, // snake_case
+              `name_as_per_pan_c${suffix}`, // snake_case full
+              `Name As Per PAN C${suffix}`, // Title Case
+              `Name As Per Pan C${suffix}`, // Mixed case
+              `name as per pan c${suffix}`, // lowercase
+              `Name as per PAN C ${suffix}`, // With space before number
+            ];
+            
+            variations.forEach(variation => {
+              if (!valueMap[variation]) {
+                valueMap[variation] = cv.field_value;
+              }
+            });
+            
+            console.log(`✅ Mapped Name as per PAN C${suffix} from key "${cv.caseField.field_key}" (label: "${cv.caseField.field_label}"): ${cv.field_value}`);
+          } else {
+            // No C number suffix - this is likely "Name as per PAN" from Excel form
+            // Map it to C1 by default (most common case)
+            const variations = [
+              'Name as per PAN C1', // Map to C1
+              'name_as_per_pan_c1',
+              'name_pan_c1',
+              'Name as per PAN', // Keep original
+              'name_as_per_pan',
+              'name_pan'
+            ];
+            
+            variations.forEach(variation => {
+              if (!valueMap[variation]) {
+                valueMap[variation] = cv.field_value;
+              }
+            });
+            
+            console.log(`✅ Mapped "Name as per PAN" (no suffix) to C1 from key "${cv.caseField.field_key}" (label: "${cv.caseField.field_label}"): ${cv.field_value}`);
+          }
         }
         if (key.includes('name as per cml c') && key.match(/c\d+$/)) {
           const suffix = key.match(/c(\d+)$/)[1];
@@ -638,6 +670,25 @@ const mapCompanyValuesToTemplate = async (companyId, templatePath) => {
           if (!valueMap['Date of Issue']) valueMap['Date of Issue'] = cv.field_value;
           if (!valueMap['date_of_issue']) valueMap['date_of_issue'] = cv.field_value;
         }
+        
+        // Handle Year of Purchase fields dynamically
+        // CRITICAL FIX: Map to both formats (with and without space) to match template
+        if ((key.includes('year of purchase') || key.includes('year_of_purchase')) && key.match(/\d+$/)) {
+          const yopMatch = key.match(/(\d+)$/);
+          if (yopMatch) {
+            const yopNum = yopMatch[1];
+            const fieldKey1 = `Year of Purchase${yopNum}`; // "Year of Purchase1" (no space)
+            const fieldKey2 = `Year of Purchase ${yopNum}`; // "Year of Purchase 1" (with space) - template format
+            
+            // Map to both formats
+            if (!valueMap[fieldKey1]) valueMap[fieldKey1] = cv.field_value;
+            if (!valueMap[fieldKey2]) valueMap[fieldKey2] = cv.field_value;
+            if (!valueMap[`year_of_purchase${yopNum}`]) valueMap[`year_of_purchase${yopNum}`] = cv.field_value;
+            if (!valueMap[`year_of_purchase_${yopNum}`]) valueMap[`year_of_purchase_${yopNum}`] = cv.field_value;
+            
+            console.log(`✅ Mapped Year of Purchase${yopNum} from key "${cv.caseField.field_key}" (both formats): ${cv.field_value}`);
+          }
+        }
       }
     });
 
@@ -680,14 +731,21 @@ const mapCompanyValuesToTemplate = async (companyId, templatePath) => {
         `Name as per Aadhar ${cnSuffix}`
       );
       // CRITICAL FIX: Ensure Name as per PAN C1 field is properly mapped
-      // Check multiple variations of the field name
-      let nameAsPerPanValue = valueMap[`Name as per PAN ${cnSuffix}`] || 
-                               valueMap[`name_as_per_pan_c${num}`] ||
+      // Check multiple variations of the field name - check snake_case FIRST since that's how it's stored in DB
+      let nameAsPerPanValue = valueMap[`name_as_per_pan_c${num}`] ||  // Check snake_case first (most common DB format)
                                valueMap[`name_pan_c${num}`] ||
+                               valueMap[`Name as per PAN ${cnSuffix}`] ||
                                valueMap[`Name as per PAN C${num}`] ||
                                valueMap[`name as per pan c${num}`] ||
                                valueMap[`Name As Per PAN ${cnSuffix}`] ||
-                               valueMap[`Name As Per Pan ${cnSuffix}`];
+                               valueMap[`Name As Per Pan ${cnSuffix}`] ||
+                               // Also check for "Name as per PAN" without C suffix (common in Excel forms)
+                               (num === '1' ? valueMap['Name as per PAN'] || valueMap['name_as_per_pan'] || valueMap['name_pan'] : null);
+      
+      console.log(`🔍 Looking for Name as per PAN ${cnSuffix}, found: "${nameAsPerPanValue || 'NOT FOUND'}"`);
+      if (nameAsPerPanValue) {
+        console.log(`✅ Found value from key: ${Object.keys(valueMap).find(k => valueMap[k] === nameAsPerPanValue && k.toLowerCase().includes('pan') && k.toLowerCase().includes(`c${num}`)) || 'unknown'}`);
+      }
       
       // AGGRESSIVE FALLBACK: If still not found, check ALL name fields for this C number
       if (!nameAsPerPanValue || nameAsPerPanValue === '_________________' || !nameAsPerPanValue.trim()) {
@@ -750,12 +808,38 @@ const mapCompanyValuesToTemplate = async (companyId, templatePath) => {
         console.log(`📋 All stored name fields:`, allNameFields[`c${num}`]);
       }
       
-      templateMappings[`Name as per PAN ${cnSuffix}`] = getValueOrPlaceholder(
-        nameAsPerPanValue, 
-        `Name as per PAN ${cnSuffix}`
-      );
+      // Use the actual value if found, otherwise use placeholder
+      // Only use getValueOrPlaceholder if the value is truly empty/undefined
+      let finalPanValue;
+      if (nameAsPerPanValue && 
+          nameAsPerPanValue.trim() !== '' && 
+          nameAsPerPanValue !== 'undefined' && 
+          nameAsPerPanValue !== 'null' &&
+          nameAsPerPanValue !== '_________________') {
+        // We have a valid value - use it directly (clean it but don't replace with placeholder)
+        finalPanValue = nameAsPerPanValue.toString().replace(/undefined|UNDEFINED|null|NULL/gi, '').trim();
+        console.log(`✅ Using actual value for Name as per PAN ${cnSuffix}: "${finalPanValue}"`);
+      } else {
+        // No value found - use placeholder
+        finalPanValue = getValueOrPlaceholder(nameAsPerPanValue, `Name as per PAN ${cnSuffix}`);
+        console.log(`⚠️ No value found for Name as per PAN ${cnSuffix}, using placeholder: "${finalPanValue}"`);
+      }
       
-      console.log(`🔍 Final mapping for Name as per PAN ${cnSuffix}: "${nameAsPerPanValue || 'NOT FOUND'}"`);
+      console.log(`🔍 Final mapping for Name as per PAN ${cnSuffix}: "${nameAsPerPanValue || 'NOT FOUND'}" -> "${finalPanValue}"`);
+      
+      // CRITICAL: Set the exact key FIRST to ensure it's not overwritten
+      // Create mappings with multiple format variations to ensure matching
+      // This ensures the placeholder in the template will match regardless of exact format
+      templateMappings[`Name as per PAN ${cnSuffix}`] = finalPanValue; // Standard format: "Name as per PAN C1" - EXACT MATCH
+      templateMappings[`Name as per PAN C${num}`] = finalPanValue; // Without space: "Name as per PAN C1" (same but explicit)
+      templateMappings[`Name As Per PAN ${cnSuffix}`] = finalPanValue; // Title case: "Name As Per PAN C1"
+      templateMappings[`name as per pan ${cnSuffix.toLowerCase()}`] = finalPanValue; // Lowercase: "name as per pan c1"
+      templateMappings[`Name as per PAN C ${num}`] = finalPanValue; // With space: "Name as per PAN C 1"
+      
+      // ALSO ensure it's in valueMap directly (before merging templateMappings)
+      // This ensures the value is available for preview and matching
+      valueMap[`Name as per PAN ${cnSuffix}`] = finalPanValue;
+      console.log(`✅ Set valueMap["Name as per PAN ${cnSuffix}"] = "${finalPanValue}"`);
       templateMappings[`Name as per CML ${cnSuffix}`] = getValueOrPlaceholder(
         valueMap[`Name as per CML ${cnSuffix}`], 
         `Name as per CML ${cnSuffix}`
@@ -1024,11 +1108,12 @@ const mapCompanyValuesToTemplate = async (companyId, templatePath) => {
     const scNumbers = new Set();
     Object.keys(valueMap).forEach(key => {
       // Match SC, DN, NOS, SC Status, and Year of Purchase fields
+      // CRITICAL FIX: Handle both "Year of Purchase1" (no space) and "Year of Purchase 1" (with space)
       const scMatch = key.match(/^SC(\d+)$/i) || 
                       key.match(/^DN(\d+)$/i) || 
                       key.match(/^NOS(\d+)$/i) || 
                       key.match(/SC\s*Status(\d+)/i) ||
-                      key.match(/Year\s*of\s*Purchase(\d+)/i);
+                      key.match(/Year\s*of\s*Purchase\s*(\d+)/i); // Matches both "Purchase1" and "Purchase 1"
       if (scMatch) {
         scNumbers.add(scMatch[1]);
       }
@@ -1070,9 +1155,19 @@ const mapCompanyValuesToTemplate = async (companyId, templatePath) => {
       templateMappings[`SC Status${scSuffix}`] = getSCValueOrEmpty(statusValue);
       
       // Year of Purchase - only for SC1
+      // CRITICAL FIX: Template uses "Year of Purchase 1" (with space), but database stores "Year of Purchase1" (without space)
+      // Map to both formats to ensure matching
       if (i === 1) {
-        const yopValue = valueMap[`Year of Purchase${scSuffix}`] || valueMap[`year_of_purchase${scSuffix}`];
-        templateMappings[`Year of Purchase${scSuffix}`] = getSCValueOrEmpty(yopValue);
+        const yopValue = valueMap[`Year of Purchase${scSuffix}`] || 
+                        valueMap[`Year of Purchase ${scSuffix}`] || 
+                        valueMap[`year_of_purchase${scSuffix}`] ||
+                        valueMap[`year_of_purchase_${scSuffix}`];
+        const finalYopValue = getSCValueOrEmpty(yopValue);
+        
+        // Map to both formats: with space and without space
+        templateMappings[`Year of Purchase${scSuffix}`] = finalYopValue; // "Year of Purchase1" (no space)
+        templateMappings[`Year of Purchase ${scSuffix}`] = finalYopValue; // "Year of Purchase 1" (with space) - template format
+        console.log(`✅ Mapped Year of Purchase for SC1: "${finalYopValue}" (both formats)`);
       }
     }
 
@@ -1553,6 +1648,55 @@ const downloadPopulatedTemplate = async (req, res) => {
     // COMPREHENSIVE CLEANUP: Remove all undefined/empty values and prevent "UNDEFINED" from appearing
     console.log('🔧 Starting comprehensive undefined cleanup for template download...');
     
+    // Helper function to clean XML tags from placeholder text
+    const cleanPlaceholderText = (text) => {
+      if (!text) return '';
+      
+      // Remove XML tags and extract text content
+      // Handle cases like: "</w:t></w:r><w:r><w:rPr>...<w:t>Name as per PAN C1</w:t>..."
+      let cleaned = text.toString();
+      
+      // Remove XML tags (both opening and closing)
+      cleaned = cleaned.replace(/<[^>]+>/g, '');
+      
+      // Remove XML entities
+      cleaned = cleaned.replace(/&[a-z]+;/gi, '');
+      
+      // Clean up whitespace
+      cleaned = cleaned.trim().replace(/\s+/g, ' ');
+      
+      return cleaned;
+    };
+    
+    // Helper function to normalize placeholder names for matching
+    const normalizePlaceholderName = (name) => {
+      // First clean XML tags if present
+      const cleaned = cleanPlaceholderText(name);
+      return cleaned.toLowerCase();
+    };
+    
+    // Helper function to find value for a placeholder using fuzzy matching
+    const findPlaceholderValue = (placeholderName, valueMap) => {
+      const normalized = normalizePlaceholderName(placeholderName);
+      
+      // First, try exact match (case-insensitive)
+      for (const [key, value] of Object.entries(valueMap)) {
+        if (normalizePlaceholderName(key) === normalized) {
+          return value;
+        }
+      }
+      
+      // Second, try partial match (contains the normalized name)
+      for (const [key, value] of Object.entries(valueMap)) {
+        const normalizedKey = normalizePlaceholderName(key);
+        if (normalizedKey.includes(normalized) || normalized.includes(normalizedKey)) {
+          return value;
+        }
+      }
+      
+      return null;
+    };
+    
     // Use utility function for comprehensive cleanup
     const cleanValueMap = cleanUndefinedValues(mappedTemplate.valueMap);
     
@@ -1560,35 +1704,264 @@ const downloadPopulatedTemplate = async (req, res) => {
     const finalCleanMap = {};
     Object.keys(cleanValueMap).forEach(key => {
       const value = cleanValueMap[key];
-      if (value === undefined || value === null || value === 'undefined' || value === 'null' || !value || value === '_________________') {
-        finalCleanMap[key] = ''; // Force empty string for placeholders
+      // Don't filter out placeholder text - keep it as is, but log it
+      if (value === undefined || value === null || value === 'undefined' || value === 'null') {
+        finalCleanMap[key] = ''; // Force empty string for undefined/null
         console.log(`🚨 FINAL CLEANUP: Forced ${key} to empty string (was: ${value})`);
+      } else if (value === '_________________') {
+        // CRITICAL FIX: Don't use dashes for important fields - try to find the actual value first
+        // For "Name as per PAN" fields, try to find the value using fuzzy matching
+        if (key.toLowerCase().includes('name as per pan')) {
+          console.log(`⚠️ Found dashes for "${key}", attempting to find actual value...`);
+          
+          // Try to find the value in the original mappedTemplate.valueMap
+          const normalizedKey = normalizePlaceholderName(key);
+          let foundValue = findPlaceholderValue(key, mappedTemplate.valueMap);
+          
+          if (!foundValue) {
+            // Try fuzzy matching with variations
+            for (const [mapKey, mapValue] of Object.entries(mappedTemplate.valueMap)) {
+              const normalizedMapKey = normalizePlaceholderName(mapKey);
+              if (normalizedMapKey === normalizedKey && 
+                  mapValue && 
+                  mapValue.trim() !== '' && 
+                  mapValue !== 'undefined' && 
+                  mapValue !== 'null' &&
+                  mapValue !== '_________________') {
+                foundValue = mapValue;
+                console.log(`✅ Found actual value for "${key}" from key "${mapKey}": "${foundValue}"`);
+                break;
+              }
+            }
+          }
+          
+          if (foundValue && foundValue.trim() !== '' && foundValue !== 'undefined' && foundValue !== 'null') {
+            finalCleanMap[key] = foundValue;
+            console.log(`✅ Replaced dashes with actual value for "${key}": "${foundValue}"`);
+          } else {
+            // If still not found, use empty string instead of dashes
+            finalCleanMap[key] = '';
+            console.log(`⚠️ Could not find value for "${key}", using empty string instead of dashes`);
+          }
+        } else {
+          // For other fields, keep placeholder text but log it
+          finalCleanMap[key] = value;
+          console.log(`⚠️ PLACEHOLDER TEXT: ${key} = ${value}`);
+        }
+      } else if (!value || (typeof value === 'string' && value.trim() === '')) {
+        finalCleanMap[key] = ''; // Force empty string for empty values
+        console.log(`🚨 FINAL CLEANUP: Forced ${key} to empty string (was empty)`);
       } else {
         finalCleanMap[key] = String(value); // Keep actual values as-is
-        console.log(`✅ KEEPING VALUE: ${key} = ${value}`);
+        // Only log important mappings to reduce noise
+        if (key.toLowerCase().includes('name as per pan')) {
+          console.log(`✅ KEEPING VALUE: ${key} = ${value}`);
+        }
       }
     });
 
     console.log(`🔧 Final template data prepared with ${Object.keys(finalCleanMap).length} fields`);
     console.log(`🔧 Sample final data:`, Object.entries(finalCleanMap).slice(0, 3));
-
+    
     // Extract and log all placeholders from the template for debugging
+    const foundPlaceholders = [];
     try {
       const templateText = doc.getFullText();
       const placeholderRegex = /\[([^\]]+)\]/g;
-      const foundPlaceholders = [];
       let match;
       while ((match = placeholderRegex.exec(templateText)) !== null) {
-        foundPlaceholders.push(match[1]);
+        // CRITICAL FIX: Clean XML tags from placeholder text
+        // Some Word templates have formatting that includes XML tags in the placeholder
+        const rawPlaceholder = match[1].trim();
+        const cleanedPlaceholder = cleanPlaceholderText(rawPlaceholder);
+        foundPlaceholders.push(cleanedPlaceholder);
+        
+        // Log if XML tags were found and removed
+        if (rawPlaceholder !== cleanedPlaceholder && rawPlaceholder.includes('<')) {
+          console.log(`🔧 Cleaned placeholder: "${rawPlaceholder.substring(0, 50)}..." -> "${cleanedPlaceholder}"`);
+        }
       }
       console.log(`📋 Found ${foundPlaceholders.length} placeholders in template: ${template.template_path}`);
       console.log(`📝 Placeholders:`, [...new Set(foundPlaceholders)].join(', '));
+      
+      // DEBUG: Check if "Name as per PAN C1" placeholder exists
+      const panC1Placeholder = foundPlaceholders.find(p => normalizePlaceholderName(p).includes('name as per pan') && normalizePlaceholderName(p).includes('c1'));
+      if (panC1Placeholder) {
+        console.log(`🔍 DEBUG: Found "Name as per PAN C1" placeholder: "${panC1Placeholder}"`);
+        console.log(`🔍 DEBUG: Checking valueMap for this placeholder...`);
+        console.log(`🔍 DEBUG: ValueMap keys containing "pan" and "c1":`, Object.keys(mappedTemplate.valueMap).filter(k => 
+          normalizePlaceholderName(k).includes('pan') && normalizePlaceholderName(k).includes('c1')
+        ));
+      }
       
       // Check for unclosed brackets
       const openBrackets = (templateText.match(/\[/g) || []).length;
       const closeBrackets = (templateText.match(/\]/g) || []).length;
       if (openBrackets !== closeBrackets) {
         console.error(`⚠️ WARNING: Mismatched brackets in template! Open: ${openBrackets}, Close: ${closeBrackets}`);
+      }
+      
+      // CRITICAL FIX: Ensure all extracted placeholders have values in finalCleanMap
+      // This handles cases where placeholder names might have slight variations
+      const uniquePlaceholders = [...new Set(foundPlaceholders)];
+      let fixedCount = 0;
+      uniquePlaceholders.forEach(placeholder => {
+        // CRITICAL: Placeholder is already cleaned during extraction, but ensure it's properly trimmed
+        // The placeholder might have been cleaned from XML tags, so use it as-is
+        const normalizedPlaceholder = placeholder.trim();
+        
+        // Also try to find the original key in valueMap that matches this cleaned placeholder
+        // This handles cases where the template has XML tags but our valueMap has clean keys
+        let matchingKey = null;
+        const normalizedPlaceholderLower = normalizePlaceholderName(normalizedPlaceholder);
+        
+        // First, try to find exact match in finalCleanMap
+        const hasExactMatch = finalCleanMap.hasOwnProperty(normalizedPlaceholder);
+        
+        // Second, try to find normalized match
+        const hasNormalizedMatch = Object.keys(finalCleanMap).some(key => {
+          const normalizedKey = normalizePlaceholderName(key);
+          if (normalizedKey === normalizedPlaceholderLower) {
+            matchingKey = key;
+            return true;
+          }
+          return false;
+        });
+        
+        if (!hasExactMatch && !hasNormalizedMatch) {
+          // Try to find the value using fuzzy matching - check BOTH cleanValueMap and original valueMap
+          let foundValue = findPlaceholderValue(normalizedPlaceholder, cleanValueMap);
+          
+          // If not found in cleanValueMap, check the original valueMap (before cleaning)
+          if (!foundValue) {
+            foundValue = findPlaceholderValue(normalizedPlaceholder, mappedTemplate.valueMap);
+          }
+          
+          // If we found a matching key but no value yet, try to get value from that key
+          if (!foundValue && matchingKey) {
+            foundValue = finalCleanMap[matchingKey] || cleanValueMap[matchingKey] || mappedTemplate.valueMap[matchingKey];
+          }
+          
+          // CRITICAL: Don't use dashes - if value is dashes, try to find the actual value
+          if (foundValue && foundValue.trim() !== '' && foundValue !== 'undefined' && foundValue !== 'null' && foundValue !== '_________________') {
+            // Use the cleaned placeholder as the key (this is what docxtemplater will look for)
+            finalCleanMap[normalizedPlaceholder] = foundValue;
+            console.log(`✅ Fixed missing mapping for placeholder "${normalizedPlaceholder}" = "${foundValue}"`);
+            fixedCount++;
+          } else if (foundValue === '_________________') {
+            // Value was found but it's dashes - try to find the actual value
+            console.log(`⚠️ Found dashes for "${normalizedPlaceholder}", searching for actual value...`);
+            // Continue to special handling below
+          } else {
+            // Special handling for "Name as per PAN C1" and similar fields
+            if (normalizedPlaceholder.toLowerCase().includes('name as per pan')) {
+              // Extract the C number
+              const cMatch = normalizedPlaceholder.match(/c\s*(\d+)/i);
+              if (cMatch) {
+                const cNum = cMatch[1];
+                const cnSuffix = `C${cNum}`;
+                
+                // Try to find using the standard mapping key - check BOTH maps
+                const standardKey = `Name as per PAN ${cnSuffix}`;
+                let standardValue = mappedTemplate.valueMap[standardKey] || 
+                                   cleanValueMap[standardKey] ||
+                                   mappedTemplate.valueMap[`name_as_per_pan_c${cNum}`] ||
+                                   cleanValueMap[`name_as_per_pan_c${cNum}`] ||
+                                   mappedTemplate.valueMap[`name_pan_c${cNum}`] ||
+                                   cleanValueMap[`name_pan_c${cNum}`] ||
+                                   mappedTemplate.valueMap[`Name As Per PAN ${cnSuffix}`] ||
+                                   cleanValueMap[`Name As Per PAN ${cnSuffix}`];
+                
+                // Try all variations with case-insensitive matching
+                if (!standardValue) {
+                  for (const [key, value] of Object.entries(mappedTemplate.valueMap)) {
+                    const normalizedKey = normalizePlaceholderName(key);
+                    if (normalizedKey.includes('name') && normalizedKey.includes('pan') && 
+                        (normalizedKey.includes(`c${cNum}`) || normalizedKey.includes(`c ${cNum}`))) {
+                      if (value && value.trim() !== '' && value !== 'undefined' && value !== 'null') {
+                        standardValue = value;
+                        console.log(`🔍 Found "Name as per PAN ${cnSuffix}" using fuzzy match on key "${key}" = "${value}"`);
+                        break;
+                      }
+                    }
+                  }
+                }
+                
+                // CRITICAL: Don't use dashes - ensure we have a real value
+                if (standardValue && 
+                    standardValue.trim() !== '' && 
+                    standardValue !== 'undefined' && 
+                    standardValue !== 'null' &&
+                    standardValue !== '_________________') {
+                  finalCleanMap[normalizedPlaceholder] = standardValue;
+                  console.log(`✅ Fixed "Name as per PAN ${cnSuffix}" mapping for placeholder "${normalizedPlaceholder}" = "${standardValue}"`);
+                  fixedCount++;
+                } else {
+                  console.log(`⚠️ WARNING: Could not find value for placeholder "${normalizedPlaceholder}"`);
+                  console.log(`🔍 Available keys in valueMap:`, Object.keys(mappedTemplate.valueMap).filter(k => 
+                    normalizePlaceholderName(k).includes('name') && normalizePlaceholderName(k).includes('pan')
+                  ));
+                  // Use empty string instead of dashes to prevent showing dashes in template
+                  finalCleanMap[normalizedPlaceholder] = ''; // Set to empty string to prevent undefined
+                }
+              }
+            } else if (normalizedPlaceholder.toLowerCase().includes('year') && normalizedPlaceholder.toLowerCase().includes('purchase')) {
+              // Special handling for "Year of Purchase" fields
+              // Extract the number (could be "Year of Purchase 1" or "Year of Purchase1")
+              const yopMatch = normalizedPlaceholder.match(/purchase\s*(\d+)/i);
+              if (yopMatch) {
+                const yopNum = yopMatch[1];
+                
+                // Try to find using both formats (with and without space)
+                const standardKey1 = `Year of Purchase${yopNum}`; // "Year of Purchase1"
+                const standardKey2 = `Year of Purchase ${yopNum}`; // "Year of Purchase 1"
+                
+                let standardValue = mappedTemplate.valueMap[standardKey1] || 
+                                   cleanValueMap[standardKey1] ||
+                                   mappedTemplate.valueMap[standardKey2] || 
+                                   cleanValueMap[standardKey2] ||
+                                   mappedTemplate.valueMap[`year_of_purchase${yopNum}`] ||
+                                   cleanValueMap[`year_of_purchase${yopNum}`] ||
+                                   mappedTemplate.valueMap[`year_of_purchase_${yopNum}`] ||
+                                   cleanValueMap[`year_of_purchase_${yopNum}`];
+                
+                // Try fuzzy matching
+                if (!standardValue) {
+                  for (const [key, value] of Object.entries(mappedTemplate.valueMap)) {
+                    const normalizedKey = normalizePlaceholderName(key);
+                    if (normalizedKey.includes('year') && normalizedKey.includes('purchase') && 
+                        (normalizedKey.includes(yopNum) || normalizedKey.includes(` ${yopNum}`))) {
+                      if (value && value.trim() !== '' && value !== 'undefined' && value !== 'null') {
+                        standardValue = value;
+                        console.log(`🔍 Found "Year of Purchase ${yopNum}" using fuzzy match on key "${key}" = "${value}"`);
+                        break;
+                      }
+                    }
+                  }
+                }
+                
+                if (standardValue && standardValue.trim() !== '' && standardValue !== 'undefined' && standardValue !== 'null') {
+                  finalCleanMap[normalizedPlaceholder] = standardValue;
+                  console.log(`✅ Fixed "Year of Purchase ${yopNum}" mapping for placeholder "${normalizedPlaceholder}" = "${standardValue}"`);
+                  fixedCount++;
+                } else {
+                  console.log(`⚠️ WARNING: Could not find value for placeholder "${normalizedPlaceholder}"`);
+                  finalCleanMap[normalizedPlaceholder] = ''; // Set to empty string to prevent undefined
+                }
+              } else {
+                console.log(`⚠️ WARNING: Could not find value for placeholder "${normalizedPlaceholder}"`);
+                finalCleanMap[normalizedPlaceholder] = ''; // Set to empty string to prevent undefined
+              }
+            } else {
+              console.log(`⚠️ WARNING: Could not find value for placeholder "${normalizedPlaceholder}"`);
+              finalCleanMap[normalizedPlaceholder] = ''; // Set to empty string to prevent undefined
+            }
+          }
+        }
+      });
+      
+      if (fixedCount > 0) {
+        console.log(`🔧 Fixed ${fixedCount} missing placeholder mappings`);
       }
     } catch (extractError) {
       console.warn('Could not extract placeholders for debugging:', extractError.message);
