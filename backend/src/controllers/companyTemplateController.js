@@ -103,8 +103,14 @@ const getValueOrPlaceholder = (value, fieldName) => {
     return getPlaceholderText(fieldName);
   }
   
-  // Special handling for date fields
-  if (fieldName && (fieldName.includes('Date') || fieldName.includes('DOB'))) {
+  // Special handling for date fields - include DOD, Date of demise, and all date variations
+  if (fieldName && (
+    fieldName.includes('Date') || 
+    fieldName.includes('DOB') || 
+    fieldName.includes('DOD') || 
+    fieldName.toLowerCase().includes('date of demise') ||
+    fieldName.toLowerCase().includes('demise')
+  )) {
     const formattedDate = formatDate(value);
     if (formattedDate) {
       return formattedDate;
@@ -548,6 +554,24 @@ const mapCompanyValuesToTemplate = async (companyId, templatePath) => {
           if (!valueMap[fieldKey]) valueMap[fieldKey] = cv.field_value;
           if (!valueMap[`claimant_relation_h${suffix}`]) valueMap[`claimant_relation_h${suffix}`] = cv.field_value;
           console.log(`✅ Mapped Claimant Relation H${suffix} from key "${cv.caseField.field_key}": ${cv.field_value}`);
+        }
+        
+        // DOD (Date of Death) H fields
+        if ((key.includes('dod') || key.includes('date of death')) && key.match(/h\d+$/i)) {
+          const suffix = key.match(/h(\d+)$/i)[1];
+          const fieldKey = `DOD H${suffix}`;
+          if (!valueMap[fieldKey]) valueMap[fieldKey] = cv.field_value;
+          if (!valueMap[`dod_h${suffix}`]) valueMap[`dod_h${suffix}`] = cv.field_value;
+          console.log(`✅ Mapped DOD H${suffix} from key "${cv.caseField.field_key}": ${cv.field_value}`);
+        }
+        
+        // Deceased Place H fields
+        if ((key.includes('deceased place') || key.includes('deceased_place')) && key.match(/h\d+$/i)) {
+          const suffix = key.match(/h(\d+)$/i)[1];
+          const fieldKey = `Deceased Place H${suffix}`;
+          if (!valueMap[fieldKey]) valueMap[fieldKey] = cv.field_value;
+          if (!valueMap[`deceased_place_h${suffix}`]) valueMap[`deceased_place_h${suffix}`] = cv.field_value;
+          console.log(`✅ Mapped Deceased Place H${suffix} from key "${cv.caseField.field_key}": ${cv.field_value}`);
         }
         // Handle father name fields dynamically
         if (key.includes('father name c') && key.match(/c\d+$/)) {
@@ -1101,7 +1125,51 @@ const mapCompanyValuesToTemplate = async (companyId, templatePath) => {
         valueMap[`relation_h${num}`],
         `Claimant Relation ${hnSuffix}`
       );
+      
+      // DOD (Date of Death) H fields - format as DD/MM/YYYY
+      const dodValue = valueMap[`DOD ${hnSuffix}`] || 
+                       valueMap[`dod_h${num}`] ||
+                       valueMap[`dod h${num}`] ||
+                       valueMap[`date_of_death_h${num}`];
+      templateMappings[`DOD ${hnSuffix}`] = getValueOrPlaceholder(
+        dodValue,
+        `DOD ${hnSuffix}`
+      );
+      
+      // Date of demise** - for ISR-5 templates (maps to DOD fields)
+      // Map to both "Date of demise**" and "Date of demise" (with/without asterisks)
+      // Also map with H suffix for specific rows: "Date of demise** H1", "Date of demise** H2", etc.
+      templateMappings[`Date of demise** ${hnSuffix}`] = getValueOrPlaceholder(
+        dodValue || valueMap[`DOD ${hnSuffix}`],
+        `Date of demise** ${hnSuffix}`
+      );
+      templateMappings[`Date of demise ${hnSuffix}`] = getValueOrPlaceholder(
+        dodValue || valueMap[`DOD ${hnSuffix}`],
+        `Date of demise ${hnSuffix}`
+      );
+      
+      // Deceased Place H fields
+      const deceasedPlaceValue = valueMap[`Deceased Place ${hnSuffix}`] || 
+                                  valueMap[`deceased_place_h${num}`] ||
+                                  valueMap[`deceased place h${num}`];
+      templateMappings[`Deceased Place ${hnSuffix}`] = getValueOrPlaceholder(
+        deceasedPlaceValue,
+        `Deceased Place ${hnSuffix}`
+      );
     });
+    
+    // Global "Date of demise**" mapping for ISR-5 templates (uses first available DOD value)
+    // This handles cases where the template has a single "Date of demise**" placeholder
+    const firstDODValue = valueMap['DOD H1'] || valueMap['DOD H2'] || valueMap['DOD H3'] || valueMap['DOD H4'] ||
+                          valueMap['dod_h1'] || valueMap['dod_h2'] || valueMap['dod_h3'] || valueMap['dod_h4'];
+    templateMappings['Date of demise**'] = getValueOrPlaceholder(
+      firstDODValue,
+      'Date of demise**'
+    );
+    templateMappings['Date of demise'] = getValueOrPlaceholder(
+      firstDODValue,
+      'Date of demise'
+    );
 
     // Dynamically add mappings for Share Certificate fields (SC1-SC10)
     // Find all unique SC numbers from the valueMap
