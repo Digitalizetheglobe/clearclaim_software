@@ -17,13 +17,13 @@ const cleanUndefinedValues = (obj) => {
         value === 'UNDEFINED' || 
         value === 'NULL' ||
         (typeof value === 'string' && value.trim() === '')) {
-      // Add helpful placeholder text based on field type
+      // Return empty string when value is not present (no placeholders)
       cleaned[key] = getPlaceholderText(key);
     } else if (typeof value === 'string') {
       // Clean any string values that contain "undefined" text
       const cleanedValue = value.replace(/undefined|UNDEFINED|null|NULL/gi, '').trim();
       if (cleanedValue === '') {
-        cleaned[key] = getPlaceholderText(key);
+        cleaned[key] = getPlaceholderText(key); // Returns empty string
       } else {
         cleaned[key] = cleanedValue;
       }
@@ -36,8 +36,35 @@ const cleanUndefinedValues = (obj) => {
 
 // Helper function to get appropriate placeholder text for different field types
 const getPlaceholderText = (key) => {
-  // Return underlines with normal formatting (black color)
-  return '_________________';
+  // Return empty string instead of placeholders when values are not present
+  // This prevents showing underscores, ampersands, and other placeholder characters
+  return '';
+};
+
+// Helper function to clean comma-separated lists (for certificate numbers, distinctive numbers, etc.)
+const cleanCommaSeparatedList = (value) => {
+  if (!value || typeof value !== 'string') return '';
+  
+  // Split by comma and filter out empty values, placeholders, and unwanted characters
+  const parts = value.split(',').map(part => part.trim()).filter(part => {
+    return part && 
+           part !== '' && 
+           part !== '&' && 
+           part !== '&amp;' && 
+           part !== 'undefined' && 
+           part !== 'null' &&
+           part !== '_________________' &&
+           !part.match(/^[.,\s&]+$/); // Not just separators
+  });
+  
+  // Join back with commas, but clean up the result
+  let cleaned = parts.join(', ');
+  
+  // Remove any trailing separators
+  cleaned = cleaned.replace(/[,.\s&]+$/g, '');
+  cleaned = cleaned.replace(/^[,.\s&]+/g, '');
+  
+  return cleaned.trim();
 };
 
 // Helper function to format dates in DD/MM/YYYY format
@@ -118,8 +145,24 @@ const getValueOrPlaceholder = (value, fieldName) => {
   }
   
   // Clean the value of any undefined text
-  const cleanedValue = value.toString().replace(/undefined|UNDEFINED|null|NULL/gi, '').trim();
-  if (cleanedValue === '') {
+  let cleanedValue = value.toString().replace(/undefined|UNDEFINED|null|NULL/gi, '').trim();
+  
+  // Remove trailing commas, "&", dots, etc. from all values
+  cleanedValue = cleanedValue.replace(/[,.\s]*&[\s,]*$/g, ''); // Remove trailing "&" with any surrounding commas/spaces
+  cleanedValue = cleanedValue.replace(/[,.\s]*&amp;[\s,]*$/g, ''); // Remove trailing "&amp;"
+  cleanedValue = cleanedValue.replace(/[,.\s]+$/g, ''); // Remove trailing commas, dots, and spaces
+  cleanedValue = cleanedValue.replace(/^[\s,]+/g, ''); // Remove leading commas and spaces
+  cleanedValue = cleanedValue.replace(/,{2,}/g, ','); // Remove multiple consecutive commas
+  cleanedValue = cleanedValue.replace(/,\s*&/g, ''); // Remove ", &"
+  cleanedValue = cleanedValue.replace(/\.\s*&/g, ''); // Remove ". &"
+  cleanedValue = cleanedValue.trim();
+  
+  if (cleanedValue === '' || 
+      cleanedValue === '&' || 
+      cleanedValue === '&amp;' ||
+      cleanedValue === ',' ||
+      cleanedValue === '.' ||
+      cleanedValue.match(/^[,.\s&]+$/)) {
     return getPlaceholderText(fieldName);
   }
   
@@ -962,10 +1005,18 @@ const mapCompanyValuesToTemplate = async (companyId, templatePath) => {
         finalPin = '';
       }
       
-      templateMappings[`PIN ${cnSuffix}`] = getValueOrPlaceholder(
-        finalPin, 
-        `PIN ${cnSuffix}`
-      );
+      // CRITICAL: For PIN fields, only use the exact value for this C number
+      // Don't allow fallback to other C numbers (e.g., don't use PIN C1 for PIN C2 or PIN C3)
+      // If finalPin is empty or doesn't exist, return empty string (not placeholder)
+      if (!finalPin || finalPin.trim() === '' || finalPin === 'undefined' || finalPin === 'null') {
+        templateMappings[`PIN ${cnSuffix}`] = ''; // Empty string, not placeholder
+        console.log(`⚠️ PIN ${cnSuffix} is empty - using empty string (not falling back to other C numbers)`);
+      } else {
+        templateMappings[`PIN ${cnSuffix}`] = getValueOrPlaceholder(
+          finalPin, 
+          `PIN ${cnSuffix}`
+        );
+      }
       templateMappings[`Old Address ${cnSuffix}`] = getValueOrPlaceholder(
         valueMap[`old_address_c${num}`] || valueMap[`Old Address ${cnSuffix}`], 
         `Old Address ${cnSuffix}`
@@ -1206,13 +1257,29 @@ const mapCompanyValuesToTemplate = async (companyId, templatePath) => {
         return cleanedValue || '';
       };
       
-      // SC field
+      // SC field - apply cleanup to remove commas and "&"
       const scValue = valueMap[`SC${scSuffix}`] || valueMap[`sc${scSuffix}`];
-      templateMappings[`SC${scSuffix}`] = getSCValueOrEmpty(scValue);
+      let cleanedSC = getSCValueOrEmpty(scValue);
+      // Clean up any trailing commas, "&", etc. from SC values
+      if (cleanedSC && typeof cleanedSC === 'string') {
+        cleanedSC = cleanedSC.replace(/[,.\s]*&[\s,]*$/g, '').replace(/[,.\s]+$/g, '').trim();
+        if (cleanedSC === '' || cleanedSC === '&' || cleanedSC.match(/^[,.\s&]+$/)) {
+          cleanedSC = '';
+        }
+      }
+      templateMappings[`SC${scSuffix}`] = cleanedSC;
       
-      // DN (Distinctive Number) field
+      // DN (Distinctive Number) field - apply cleanup to remove commas and "&"
       const dnValue = valueMap[`DN${scSuffix}`] || valueMap[`dn${scSuffix}`];
-      templateMappings[`DN${scSuffix}`] = getSCValueOrEmpty(dnValue);
+      let cleanedDN = getSCValueOrEmpty(dnValue);
+      // Clean up any trailing commas, "&", etc. from DN values
+      if (cleanedDN && typeof cleanedDN === 'string') {
+        cleanedDN = cleanedDN.replace(/[,.\s]*&[\s,]*$/g, '').replace(/[,.\s]+$/g, '').trim();
+        if (cleanedDN === '' || cleanedDN === '&' || cleanedDN.match(/^[,.\s&]+$/)) {
+          cleanedDN = '';
+        }
+      }
+      templateMappings[`DN${scSuffix}`] = cleanedDN;
       
       // NOS (Number of Securities) field
       const nosValue = valueMap[`NOS${scSuffix}`] || valueMap[`nos${scSuffix}`];
@@ -1238,6 +1305,42 @@ const mapCompanyValuesToTemplate = async (companyId, templatePath) => {
         console.log(`✅ Mapped Year of Purchase for SC1: "${finalYopValue}" (both formats)`);
       }
     }
+
+    // Build combined certificate numbers and distinctive numbers for ISR-4 template
+    // These are comma-separated lists built from SC1-SC10 and DN1-DN10
+    const certificateNumbers = [];
+    const distinctiveNumbers = [];
+    
+    for (let i = 1; i <= 10; i++) {
+      const scValue = templateMappings[`SC${i}`];
+      const dnValue = templateMappings[`DN${i}`];
+      
+      // Only add non-empty SC values to certificate numbers list
+      if (scValue && scValue.trim() !== '' && scValue !== '&' && !scValue.match(/^[,.\s&]+$/)) {
+        certificateNumbers.push(scValue.trim());
+      }
+      
+      // Only add non-empty DN values to distinctive numbers list
+      if (dnValue && dnValue.trim() !== '' && dnValue !== '&' && !dnValue.match(/^[,.\s&]+$/)) {
+        distinctiveNumbers.push(dnValue.trim());
+      }
+    }
+    
+    // Create cleaned comma-separated strings (no trailing commas or "&")
+    const certificateNumbersStr = certificateNumbers.length > 0 
+      ? certificateNumbers.join(', ') 
+      : '';
+    const distinctiveNumbersStr = distinctiveNumbers.length > 0 
+      ? distinctiveNumbers.join(', ') 
+      : '';
+    
+    // Map to common placeholder names used in ISR-4 template
+    templateMappings['Certificate numbers'] = certificateNumbersStr;
+    templateMappings['certificate numbers'] = certificateNumbersStr;
+    templateMappings['Certificate Numbers'] = certificateNumbersStr;
+    templateMappings['Distinctive numbers'] = distinctiveNumbersStr;
+    templateMappings['distinctive numbers'] = distinctiveNumbersStr;
+    templateMappings['Distinctive Numbers'] = distinctiveNumbersStr;
 
     // Merge template mappings with valueMap
     Object.assign(valueMap, templateMappings);
@@ -1305,8 +1408,8 @@ const mapCompanyValuesToTemplate = async (companyId, templatePath) => {
     
     commonPlaceholders.forEach(placeholder => {
       if (!valueMap.hasOwnProperty(placeholder)) {
-        valueMap[placeholder] = getPlaceholderText(placeholder);
-        console.log(`📝 Initialized placeholder [${placeholder}] with placeholder text`);
+        valueMap[placeholder] = getPlaceholderText(placeholder); // Returns empty string now
+        console.log(`📝 Initialized placeholder [${placeholder}] with empty string`);
       }
     });
     
@@ -1747,17 +1850,40 @@ const downloadPopulatedTemplate = async (req, res) => {
     const findPlaceholderValue = (placeholderName, valueMap) => {
       const normalized = normalizePlaceholderName(placeholderName);
       
+      // CRITICAL: For PIN fields, extract the C number to prevent cross-contamination
+      // Don't allow PIN C1 to be used for PIN C2 or PIN C3
+      const pinMatch = normalized.match(/pin\s*c(\d+)/i);
+      const requiredCNumber = pinMatch ? pinMatch[1] : null;
+      
       // First, try exact match (case-insensitive)
       for (const [key, value] of Object.entries(valueMap)) {
         if (normalizePlaceholderName(key) === normalized) {
-          return value;
+          // For PIN fields, verify the C number matches
+          if (requiredCNumber) {
+            const keyPinMatch = normalizePlaceholderName(key).match(/pin\s*c(\d+)/i);
+            if (keyPinMatch && keyPinMatch[1] === requiredCNumber) {
+              return value;
+            }
+          } else {
+            return value;
+          }
         }
       }
       
       // Second, try partial match (contains the normalized name)
+      // BUT: For PIN fields, ensure C number matches exactly
       for (const [key, value] of Object.entries(valueMap)) {
         const normalizedKey = normalizePlaceholderName(key);
         if (normalizedKey.includes(normalized) || normalized.includes(normalizedKey)) {
+          // For PIN fields, verify the C number matches exactly
+          if (requiredCNumber) {
+            const keyPinMatch = normalizedKey.match(/pin\s*c(\d+)/i);
+            if (keyPinMatch && keyPinMatch[1] === requiredCNumber) {
+              return value;
+            }
+            // Don't return if C numbers don't match
+            continue;
+          }
           return value;
         }
       }
@@ -1812,9 +1938,9 @@ const downloadPopulatedTemplate = async (req, res) => {
             console.log(`⚠️ Could not find value for "${key}", using empty string instead of dashes`);
           }
         } else {
-          // For other fields, keep placeholder text but log it
-          finalCleanMap[key] = value;
-          console.log(`⚠️ PLACEHOLDER TEXT: ${key} = ${value}`);
+          // For other fields, return empty string instead of placeholder text
+          finalCleanMap[key] = '';
+          console.log(`⚠️ Removed placeholder text for "${key}", using empty string`);
         }
       } else if (!value || (typeof value === 'string' && value.trim() === '')) {
         finalCleanMap[key] = ''; // Force empty string for empty values
@@ -1906,112 +2032,198 @@ const downloadPopulatedTemplate = async (req, res) => {
           }
           
           // If we found a matching key but no value yet, try to get value from that key
+          // CRITICAL: For PIN fields, verify C number matches before using the value
           if (!foundValue && matchingKey) {
-            foundValue = finalCleanMap[matchingKey] || cleanValueMap[matchingKey] || mappedTemplate.valueMap[matchingKey];
+            const potentialValue = finalCleanMap[matchingKey] || cleanValueMap[matchingKey] || mappedTemplate.valueMap[matchingKey];
+            
+            // For PIN fields, check if the C number matches
+            const pinMatch = normalizedPlaceholder.match(/pin\s*c(\d+)/i);
+            if (pinMatch) {
+              const requiredCNumber = pinMatch[1];
+              const keyPinMatch = normalizePlaceholderName(matchingKey).match(/pin\s*c(\d+)/i);
+              
+              // Only use the value if C numbers match exactly
+              if (keyPinMatch && keyPinMatch[1] === requiredCNumber) {
+                foundValue = potentialValue;
+              } else {
+                // C numbers don't match - don't use this value (prevents PIN C1 from being used for C2/C3)
+                foundValue = null;
+                console.log(`⚠️ PIN field mismatch: Placeholder requires C${requiredCNumber}, but found C${keyPinMatch ? keyPinMatch[1] : 'unknown'} - not using this value`);
+              }
+            } else {
+              foundValue = potentialValue;
+            }
           }
           
           // CRITICAL: Don't use dashes - if value is dashes, try to find the actual value
+          // CRITICAL: For PIN fields, ensure we only use values with matching C numbers
           if (foundValue && foundValue.trim() !== '' && foundValue !== 'undefined' && foundValue !== 'null' && foundValue !== '_________________') {
-            // Use the cleaned placeholder as the key (this is what docxtemplater will look for)
-            finalCleanMap[normalizedPlaceholder] = foundValue;
-            console.log(`✅ Fixed missing mapping for placeholder "${normalizedPlaceholder}" = "${foundValue}"`);
-            fixedCount++;
+            // For PIN fields, double-check C number matches
+            const pinMatch = normalizedPlaceholder.match(/pin\s*c(\d+)/i);
+            if (pinMatch) {
+              const requiredCNumber = pinMatch[1];
+              // Verify the found value is actually for the correct C number
+              // This prevents PIN C1 from being used for PIN C2 or PIN C3
+              const valueKey = Object.keys(mappedTemplate.valueMap).find(k => 
+                mappedTemplate.valueMap[k] === foundValue && 
+                normalizePlaceholderName(k).match(/pin\s*c(\d+)/i) &&
+                normalizePlaceholderName(k).match(/pin\s*c(\d+)/i)[1] === requiredCNumber
+              );
+              
+              if (!valueKey) {
+                // The found value doesn't match the required C number - don't use it
+                console.log(`⚠️ PIN C${requiredCNumber} not found - using empty string instead of wrong value`);
+                foundValue = null;
+              }
+            }
+            
+            if (foundValue) {
+              // Use the cleaned placeholder as the key (this is what docxtemplater will look for)
+              finalCleanMap[normalizedPlaceholder] = foundValue;
+              console.log(`✅ Fixed missing mapping for placeholder "${normalizedPlaceholder}" = "${foundValue}"`);
+              fixedCount++;
+            } else {
+              // No valid value found - use empty string
+              finalCleanMap[normalizedPlaceholder] = '';
+              console.log(`⚠️ No valid value found for "${normalizedPlaceholder}" - using empty string`);
+            }
           } else if (foundValue === '_________________') {
-            // Value was found but it's dashes - try to find the actual value
-            console.log(`⚠️ Found dashes for "${normalizedPlaceholder}", searching for actual value...`);
-            // Continue to special handling below
+            // Value was found but it's dashes - use empty string instead
+            finalCleanMap[normalizedPlaceholder] = '';
+            console.log(`⚠️ Found dashes for "${normalizedPlaceholder}", using empty string`);
+            fixedCount++;
           } else {
-            // Special handling for "Name as per PAN C1" and similar fields
-            if (normalizedPlaceholder.toLowerCase().includes('name as per pan')) {
-              // Extract the C number
-              const cMatch = normalizedPlaceholder.match(/c\s*(\d+)/i);
-              if (cMatch) {
-                const cNum = cMatch[1];
-                const cnSuffix = `C${cNum}`;
+            // Special handling for PIN fields - ensure C numbers match exactly
+            let pinHandled = false;
+            if (normalizedPlaceholder.toLowerCase().includes('pin')) {
+              const pinMatch = normalizedPlaceholder.match(/pin\s*c(\d+)/i);
+              if (pinMatch) {
+                const requiredCNumber = pinMatch[1];
+                const cnSuffix = `C${requiredCNumber}`;
                 
-                // Try to find using the standard mapping key - check BOTH maps
-                const standardKey = `Name as per PAN ${cnSuffix}`;
-                let standardValue = mappedTemplate.valueMap[standardKey] || 
-                                   cleanValueMap[standardKey] ||
-                                   mappedTemplate.valueMap[`name_as_per_pan_c${cNum}`] ||
-                                   cleanValueMap[`name_as_per_pan_c${cNum}`] ||
-                                   mappedTemplate.valueMap[`name_pan_c${cNum}`] ||
-                                   cleanValueMap[`name_pan_c${cNum}`] ||
-                                   mappedTemplate.valueMap[`Name As Per PAN ${cnSuffix}`] ||
-                                   cleanValueMap[`Name As Per PAN ${cnSuffix}`];
+                // Try to find the exact PIN field for this C number
+                const exactPinKey = `PIN ${cnSuffix}`;
+                const exactPinValue = mappedTemplate.valueMap[exactPinKey] || 
+                                     cleanValueMap[exactPinKey] ||
+                                     mappedTemplate.valueMap[`pin_c${requiredCNumber}`] ||
+                                     cleanValueMap[`pin_c${requiredCNumber}`];
                 
-                // Try all variations with case-insensitive matching
-                if (!standardValue) {
-                  for (const [key, value] of Object.entries(mappedTemplate.valueMap)) {
-                    const normalizedKey = normalizePlaceholderName(key);
-                    if (normalizedKey.includes('name') && normalizedKey.includes('pan') && 
-                        (normalizedKey.includes(`c${cNum}`) || normalizedKey.includes(`c ${cNum}`))) {
-                      if (value && value.trim() !== '' && value !== 'undefined' && value !== 'null') {
-                        standardValue = value;
-                        console.log(`🔍 Found "Name as per PAN ${cnSuffix}" using fuzzy match on key "${key}" = "${value}"`);
-                        break;
-                      }
-                    }
-                  }
-                }
-                
-                // CRITICAL: Don't use dashes - ensure we have a real value
-                if (standardValue && 
-                    standardValue.trim() !== '' && 
-                    standardValue !== 'undefined' && 
-                    standardValue !== 'null' &&
-                    standardValue !== '_________________') {
-                  finalCleanMap[normalizedPlaceholder] = standardValue;
-                  console.log(`✅ Fixed "Name as per PAN ${cnSuffix}" mapping for placeholder "${normalizedPlaceholder}" = "${standardValue}"`);
+                // Only use if it's a valid value and matches the C number
+                if (exactPinValue && 
+                    exactPinValue.trim() !== '' && 
+                    exactPinValue !== 'undefined' && 
+                    exactPinValue !== 'null' &&
+                    exactPinValue !== '_________________') {
+                  finalCleanMap[normalizedPlaceholder] = exactPinValue;
+                  console.log(`✅ Found exact PIN ${cnSuffix} for placeholder "${normalizedPlaceholder}" = "${exactPinValue}"`);
                   fixedCount++;
+                  pinHandled = true;
                 } else {
-                  console.log(`⚠️ WARNING: Could not find value for placeholder "${normalizedPlaceholder}"`);
-                  console.log(`🔍 Available keys in valueMap:`, Object.keys(mappedTemplate.valueMap).filter(k => 
-                    normalizePlaceholderName(k).includes('name') && normalizePlaceholderName(k).includes('pan')
-                  ));
-                  // Use empty string instead of dashes to prevent showing dashes in template
-                  finalCleanMap[normalizedPlaceholder] = ''; // Set to empty string to prevent undefined
+                  // No valid PIN found for this C number - use empty string (don't fallback to C1)
+                  finalCleanMap[normalizedPlaceholder] = '';
+                  console.log(`⚠️ PIN ${cnSuffix} not found - using empty string (not falling back to other C numbers)`);
+                  pinHandled = true;
                 }
               }
-            } else if (normalizedPlaceholder.toLowerCase().includes('year') && normalizedPlaceholder.toLowerCase().includes('purchase')) {
-              // Special handling for "Year of Purchase" fields
-              // Extract the number (could be "Year of Purchase 1" or "Year of Purchase1")
-              const yopMatch = normalizedPlaceholder.match(/purchase\s*(\d+)/i);
-              if (yopMatch) {
-                const yopNum = yopMatch[1];
-                
-                // Try to find using both formats (with and without space)
-                const standardKey1 = `Year of Purchase${yopNum}`; // "Year of Purchase1"
-                const standardKey2 = `Year of Purchase ${yopNum}`; // "Year of Purchase 1"
-                
-                let standardValue = mappedTemplate.valueMap[standardKey1] || 
-                                   cleanValueMap[standardKey1] ||
-                                   mappedTemplate.valueMap[standardKey2] || 
-                                   cleanValueMap[standardKey2] ||
-                                   mappedTemplate.valueMap[`year_of_purchase${yopNum}`] ||
-                                   cleanValueMap[`year_of_purchase${yopNum}`] ||
-                                   mappedTemplate.valueMap[`year_of_purchase_${yopNum}`] ||
-                                   cleanValueMap[`year_of_purchase_${yopNum}`];
-                
-                // Try fuzzy matching
-                if (!standardValue) {
-                  for (const [key, value] of Object.entries(mappedTemplate.valueMap)) {
-                    const normalizedKey = normalizePlaceholderName(key);
-                    if (normalizedKey.includes('year') && normalizedKey.includes('purchase') && 
-                        (normalizedKey.includes(yopNum) || normalizedKey.includes(` ${yopNum}`))) {
-                      if (value && value.trim() !== '' && value !== 'undefined' && value !== 'null') {
-                        standardValue = value;
-                        console.log(`🔍 Found "Year of Purchase ${yopNum}" using fuzzy match on key "${key}" = "${value}"`);
-                        break;
+            }
+            
+            // Skip other special handling if PIN was already handled
+            if (!pinHandled) {
+              // Special handling for "Name as per PAN C1" and similar fields
+              if (normalizedPlaceholder.toLowerCase().includes('name as per pan')) {
+                // Extract the C number
+                const cMatch = normalizedPlaceholder.match(/c\s*(\d+)/i);
+                if (cMatch) {
+                  const cNum = cMatch[1];
+                  const cnSuffix = `C${cNum}`;
+                  
+                  // Try to find using the standard mapping key - check BOTH maps
+                  const standardKey = `Name as per PAN ${cnSuffix}`;
+                  let standardValue = mappedTemplate.valueMap[standardKey] || 
+                                     cleanValueMap[standardKey] ||
+                                     mappedTemplate.valueMap[`name_as_per_pan_c${cNum}`] ||
+                                     cleanValueMap[`name_as_per_pan_c${cNum}`] ||
+                                     mappedTemplate.valueMap[`name_pan_c${cNum}`] ||
+                                     cleanValueMap[`name_pan_c${cNum}`] ||
+                                     mappedTemplate.valueMap[`Name As Per PAN ${cnSuffix}`] ||
+                                     cleanValueMap[`Name As Per PAN ${cnSuffix}`];
+                  
+                  // Try all variations with case-insensitive matching
+                  if (!standardValue) {
+                    for (const [key, value] of Object.entries(mappedTemplate.valueMap)) {
+                      const normalizedKey = normalizePlaceholderName(key);
+                      if (normalizedKey.includes('name') && normalizedKey.includes('pan') && 
+                          (normalizedKey.includes(`c${cNum}`) || normalizedKey.includes(`c ${cNum}`))) {
+                        if (value && value.trim() !== '' && value !== 'undefined' && value !== 'null') {
+                          standardValue = value;
+                          console.log(`🔍 Found "Name as per PAN ${cnSuffix}" using fuzzy match on key "${key}" = "${value}"`);
+                          break;
+                        }
                       }
                     }
                   }
+                  
+                  // CRITICAL: Don't use dashes - ensure we have a real value
+                  if (standardValue && 
+                      standardValue.trim() !== '' && 
+                      standardValue !== 'undefined' && 
+                      standardValue !== 'null' &&
+                      standardValue !== '_________________') {
+                    finalCleanMap[normalizedPlaceholder] = standardValue;
+                    console.log(`✅ Fixed "Name as per PAN ${cnSuffix}" mapping for placeholder "${normalizedPlaceholder}" = "${standardValue}"`);
+                    fixedCount++;
+                  } else {
+                    console.log(`⚠️ WARNING: Could not find value for placeholder "${normalizedPlaceholder}"`);
+                    console.log(`🔍 Available keys in valueMap:`, Object.keys(mappedTemplate.valueMap).filter(k => 
+                      normalizePlaceholderName(k).includes('name') && normalizePlaceholderName(k).includes('pan')
+                    ));
+                    // Use empty string instead of dashes to prevent showing dashes in template
+                    finalCleanMap[normalizedPlaceholder] = ''; // Set to empty string to prevent undefined
+                  }
                 }
-                
-                if (standardValue && standardValue.trim() !== '' && standardValue !== 'undefined' && standardValue !== 'null') {
-                  finalCleanMap[normalizedPlaceholder] = standardValue;
-                  console.log(`✅ Fixed "Year of Purchase ${yopNum}" mapping for placeholder "${normalizedPlaceholder}" = "${standardValue}"`);
-                  fixedCount++;
+              } else if (normalizedPlaceholder.toLowerCase().includes('year') && normalizedPlaceholder.toLowerCase().includes('purchase')) {
+                // Special handling for "Year of Purchase" fields
+                // Extract the number (could be "Year of Purchase 1" or "Year of Purchase1")
+                const yopMatch = normalizedPlaceholder.match(/purchase\s*(\d+)/i);
+                if (yopMatch) {
+                  const yopNum = yopMatch[1];
+                  
+                  // Try to find using both formats (with and without space)
+                  const standardKey1 = `Year of Purchase${yopNum}`; // "Year of Purchase1"
+                  const standardKey2 = `Year of Purchase ${yopNum}`; // "Year of Purchase 1"
+                  
+                  let standardValue = mappedTemplate.valueMap[standardKey1] || 
+                                     cleanValueMap[standardKey1] ||
+                                     mappedTemplate.valueMap[standardKey2] || 
+                                     cleanValueMap[standardKey2] ||
+                                     mappedTemplate.valueMap[`year_of_purchase${yopNum}`] ||
+                                     cleanValueMap[`year_of_purchase${yopNum}`] ||
+                                     mappedTemplate.valueMap[`year_of_purchase_${yopNum}`] ||
+                                     cleanValueMap[`year_of_purchase_${yopNum}`];
+                  
+                  // Try fuzzy matching
+                  if (!standardValue) {
+                    for (const [key, value] of Object.entries(mappedTemplate.valueMap)) {
+                      const normalizedKey = normalizePlaceholderName(key);
+                      if (normalizedKey.includes('year') && normalizedKey.includes('purchase') && 
+                          (normalizedKey.includes(yopNum) || normalizedKey.includes(` ${yopNum}`))) {
+                        if (value && value.trim() !== '' && value !== 'undefined' && value !== 'null') {
+                          standardValue = value;
+                          console.log(`🔍 Found "Year of Purchase ${yopNum}" using fuzzy match on key "${key}" = "${value}"`);
+                          break;
+                        }
+                      }
+                    }
+                  }
+                  
+                  if (standardValue && standardValue.trim() !== '' && standardValue !== 'undefined' && standardValue !== 'null') {
+                    finalCleanMap[normalizedPlaceholder] = standardValue;
+                    console.log(`✅ Fixed "Year of Purchase ${yopNum}" mapping for placeholder "${normalizedPlaceholder}" = "${standardValue}"`);
+                    fixedCount++;
+                  } else {
+                    console.log(`⚠️ WARNING: Could not find value for placeholder "${normalizedPlaceholder}"`);
+                    finalCleanMap[normalizedPlaceholder] = ''; // Set to empty string to prevent undefined
+                  }
                 } else {
                   console.log(`⚠️ WARNING: Could not find value for placeholder "${normalizedPlaceholder}"`);
                   finalCleanMap[normalizedPlaceholder] = ''; // Set to empty string to prevent undefined
@@ -2020,9 +2232,6 @@ const downloadPopulatedTemplate = async (req, res) => {
                 console.log(`⚠️ WARNING: Could not find value for placeholder "${normalizedPlaceholder}"`);
                 finalCleanMap[normalizedPlaceholder] = ''; // Set to empty string to prevent undefined
               }
-            } else {
-              console.log(`⚠️ WARNING: Could not find value for placeholder "${normalizedPlaceholder}"`);
-              finalCleanMap[normalizedPlaceholder] = ''; // Set to empty string to prevent undefined
             }
           }
         }
@@ -2035,8 +2244,87 @@ const downloadPopulatedTemplate = async (req, res) => {
       console.warn('Could not extract placeholders for debugging:', extractError.message);
     }
     
+    // Final cleanup: Remove any unwanted characters like "&", dots, commas, etc. from empty or placeholder values
+    const cleanedFinalMap = {};
+    Object.keys(finalCleanMap).forEach(key => {
+      let value = finalCleanMap[key];
+      
+      // If value is empty, placeholder text, or contains only unwanted characters, set to empty string
+      if (!value || 
+          value === '_________________' || 
+          value === 'undefined' || 
+          value === 'null' ||
+          value === '&' ||
+          value === '&amp;' ||
+          (typeof value === 'string' && value.trim() === '') ||
+          (typeof value === 'string' && value.trim() === '&') ||
+          (typeof value === 'string' && value.trim() === '&amp;')) {
+        cleanedFinalMap[key] = '';
+      } else {
+        // Check if this is a comma-separated list field (certificate numbers, distinctive numbers, etc.)
+        const isListField = key.toLowerCase().includes('certificate') || 
+                           key.toLowerCase().includes('distinctive') ||
+                           key.toLowerCase().includes('certificate number') ||
+                           key.toLowerCase().includes('distinctive number') ||
+                           key.toLowerCase().includes('sc') ||
+                           key.toLowerCase().includes('dn');
+        
+        let cleanedValue;
+        if (isListField && typeof value === 'string' && value.includes(',')) {
+          // Use specialized cleaning for comma-separated lists
+          cleanedValue = cleanCommaSeparatedList(value);
+        } else {
+          // Clean the value: remove unwanted characters like standalone "&", "&amp;", trailing commas, dots, etc.
+          cleanedValue = String(value);
+          
+          // Remove trailing separators and unwanted characters
+          // Remove trailing commas, spaces, and "&" (e.g., "123, 456, , &" -> "123, 456")
+          cleanedValue = cleanedValue.replace(/[\s,]*&[\s,]*$/g, ''); // Remove trailing "&" with any surrounding commas/spaces
+          cleanedValue = cleanedValue.replace(/[\s,]*&amp;[\s,]*$/g, ''); // Remove trailing "&amp;" with any surrounding commas/spaces
+          cleanedValue = cleanedValue.replace(/[,.\s]+$/g, ''); // Remove trailing commas, dots, and spaces
+          cleanedValue = cleanedValue.replace(/^[\s,]+/g, ''); // Remove leading commas and spaces
+          
+          // Remove multiple consecutive commas (e.g., ",," -> "")
+          cleanedValue = cleanedValue.replace(/,{2,}/g, ',');
+          
+          // Remove commas/dots followed by spaces and "&" (e.g., ", &" -> "")
+          cleanedValue = cleanedValue.replace(/,\s*&/g, '');
+          cleanedValue = cleanedValue.replace(/\.\s*&/g, '');
+          cleanedValue = cleanedValue.replace(/,\s*&amp;/g, '');
+          cleanedValue = cleanedValue.replace(/\.\s*&amp;/g, '');
+          
+          // Remove standalone "&" characters (but keep "&" in valid text like "A&B Company")
+          cleanedValue = cleanedValue.replace(/\s*&\s*$/g, ''); // Remove trailing "&"
+          cleanedValue = cleanedValue.replace(/^\s*&\s*/g, ''); // Remove leading "&"
+          cleanedValue = cleanedValue.replace(/\s*&amp;\s*$/g, ''); // Remove trailing "&amp;"
+          cleanedValue = cleanedValue.replace(/^\s*&amp;\s*/g, ''); // Remove leading "&amp;"
+          
+          // Remove multiple dots/periods at the end
+          cleanedValue = cleanedValue.replace(/\.{2,}$/g, '');
+          
+          // Remove trailing comma-space combinations (e.g., ", " at the end)
+          cleanedValue = cleanedValue.replace(/,\s*$/g, '');
+          
+          // Trim whitespace
+          cleanedValue = cleanedValue.trim();
+        }
+        
+        // If after cleaning the value is empty or only contains separators, set to empty string
+        if (cleanedValue === '' || 
+            cleanedValue === '&' || 
+            cleanedValue === '&amp;' ||
+            cleanedValue === ',' ||
+            cleanedValue === '.' ||
+            cleanedValue.match(/^[,.\s&]+$/)) { // Only separators
+          cleanedFinalMap[key] = '';
+        } else {
+          cleanedFinalMap[key] = cleanedValue;
+        }
+      }
+    });
+    
     // Set the template variables with the final clean map
-    doc.setData(finalCleanMap);
+    doc.setData(cleanedFinalMap);
     
     try {
       // Render the document (replace all placeholders)
