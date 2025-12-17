@@ -6,7 +6,8 @@ const {
   updateCase,
   deleteCase,
   getCaseStats,
-  getMyAssignedCases
+  getMyAssignedCases,
+  getPrintReadyCases
 } = require('../controllers/caseController');
 const { auth, requireRole } = require('../middleware/auth');
 
@@ -23,6 +24,9 @@ router.get('/stats', requireRole(['admin']), getCaseStats);
 
 // Get cases assigned to the current logged-in user (any authenticated user)
 router.get('/my-assigned', getMyAssignedCases);
+
+// Get print-ready cases (admin only)
+router.get('/print-ready', requireRole(['admin']), getPrintReadyCases);
 
 // Get single case by ID (user can only see their assigned cases or admin can see all)
 router.get('/:id', getCaseById);

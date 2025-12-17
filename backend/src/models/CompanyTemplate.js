@@ -11,6 +11,8 @@ const CompanyTemplate = (sequelize) => {
     selected_by: { type: DataTypes.INTEGER, allowNull: true, references: { model: 'users', key: 'id' } },
     selected_at: { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
     admin_comment: { type: DataTypes.TEXT, allowNull: true },
+    admin_remark: { type: DataTypes.TEXT, allowNull: true },
+    review_status: { type: DataTypes.STRING(50), allowNull: true },
     employee_response: { type: DataTypes.TEXT, allowNull: true }
   }, {
     tableName: 'company_templates',

@@ -34,4 +34,10 @@ router.patch('/:templateId/employee-response', devAuth, companyTemplateControlle
 // Get template preview for admin review
 router.get('/:companyId/template-preview/:templateId', devAuth, companyTemplateController.getTemplatePreview);
 
+// Get employee performance metrics (admin only)
+router.get('/performance/employees', devAuth, companyTemplateController.getEmployeePerformance);
+
+// Get detailed templates for a specific employee performance metric (admin only)
+router.get('/performance/employee/:employeeId/details', devAuth, companyTemplateController.getEmployeePerformanceDetails);
+
 module.exports = router;

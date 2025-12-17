@@ -407,6 +407,135 @@ const getMyAssignedCases = async (req, res) => {
   }
 };
 
+// Get print-ready cases (all templates and companies have status 'done'/'completed')
+const getPrintReadyCases = async (req, res) => {
+  try {
+    const { Company, CompanyTemplate } = require('../models');
+    
+    // Get all completed cases
+    const completedCases = await Case.findAll({
+      where: {
+        status: 'completed'
+      },
+      include: [
+        {
+          model: User,
+          as: 'createdByUser',
+          attributes: ['id', 'name', 'email']
+        },
+        {
+          model: User,
+          as: 'assignedUser',
+          attributes: ['id', 'name', 'email']
+        },
+        {
+          model: Company,
+          as: 'companies',
+          attributes: ['id', 'company_name', 'status', 'created_at'],
+          include: [
+            {
+              model: User,
+              as: 'assignedUser',
+              attributes: ['id', 'name', 'email']
+            },
+            {
+              model: CompanyTemplate,
+              as: 'companyTemplates',
+              attributes: ['id', 'template_name', 'template_category', 'review_status', 'is_selected'],
+              required: false
+            }
+          ]
+        }
+      ],
+      order: [['created_at', 'DESC']]
+    });
+
+    // Filter cases where:
+    // 1. All companies have status 'completed'
+    // 2. All selected templates have review_status 'done'
+    const printReadyCases = completedCases.filter(caseItem => {
+      // Check if case has companies
+      if (!caseItem.companies || caseItem.companies.length === 0) {
+        return false;
+      }
+
+      // Check if all companies are completed
+      const allCompaniesCompleted = caseItem.companies.every(
+        company => company.status === 'completed'
+      );
+
+      if (!allCompaniesCompleted) {
+        return false;
+      }
+
+      // Check if all selected templates have review_status 'done'
+      for (const company of caseItem.companies) {
+        const allTemplates = company.companyTemplates || [];
+        
+        // Filter to only selected templates
+        const selectedTemplates = allTemplates.filter(t => t.is_selected === true);
+        
+        // If company has no selected templates, skip it (or consider it not ready)
+        if (selectedTemplates.length === 0) {
+          return false;
+        }
+
+        // Check if all selected templates are 'done'
+        const allTemplatesDone = selectedTemplates.every(
+          template => template.review_status === 'done'
+        );
+
+        if (!allTemplatesDone) {
+          return false;
+        }
+      }
+
+      return true;
+    });
+
+    // Format the response
+    const formattedCases = printReadyCases.map(caseItem => ({
+      id: caseItem.id,
+      case_id: caseItem.case_id,
+      case_title: caseItem.case_title,
+      client_name: caseItem.client_name,
+      client_email: caseItem.client_email,
+      client_mobile: caseItem.client_mobile,
+      status: caseItem.status,
+      created_at: caseItem.created_at,
+      updated_at: caseItem.updated_at,
+      created_by_user: caseItem.createdByUser,
+      assigned_user: caseItem.assignedUser,
+      companies: caseItem.companies.map(company => {
+        const allTemplates = company.companyTemplates || [];
+        const selectedTemplates = allTemplates.filter(t => t.is_selected === true);
+        return {
+          id: company.id,
+          company_name: company.company_name,
+          status: company.status,
+          created_at: company.created_at,
+          templates_count: selectedTemplates.length,
+          templates: selectedTemplates.map(t => ({
+            id: t.id,
+            template_name: t.template_name,
+            template_category: t.template_category,
+            review_status: t.review_status
+          }))
+        };
+      })
+    }));
+
+    res.json({
+      cases: formattedCases,
+      total: formattedCases.length,
+      message: 'Print-ready cases fetched successfully'
+    });
+  } catch (error) {
+    console.error('Get print-ready cases error:', error);
+    res.status(500).json({ error: 'Failed to fetch print-ready cases.' });
+  }
+};
+
 module.exports = {
   getAllCases,
   getCaseById,
@@ -414,5 +543,6 @@ module.exports = {
   updateCase,
   deleteCase,
   getCaseStats,
-  getMyAssignedCases
+  getMyAssignedCases,
+  getPrintReadyCases
 };

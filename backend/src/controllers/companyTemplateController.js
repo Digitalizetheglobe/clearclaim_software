@@ -2540,6 +2540,11 @@ const getSelectedTemplates = async (req, res) => {
         company_id: companyId,
         is_selected: true 
       },
+      include: [{
+        model: models.User,
+        as: 'selectedByUser',
+        attributes: ['id', 'name', 'email']
+      }],
       order: [['selected_at', 'DESC']]
     });
 
@@ -2555,8 +2560,16 @@ const getSelectedTemplates = async (req, res) => {
       template_type: ct.template_type || '',
       is_selected: ct.is_selected,
       selected_at: ct.selected_at,
-      selected_by: ct.selected_by ? { id: ct.selected_by, name: 'Employee' } : null,
+      selected_by: ct.selectedByUser ? { 
+        id: ct.selectedByUser.id, 
+        name: ct.selectedByUser.name || 'Unknown',
+        email: ct.selectedByUser.email 
+      } : null,
       admin_comment: ct.admin_comment || '',
+      admin_remark: ct.admin_remark || '',
+      review_status: ct.review_status || '',
+      employee_response: ct.employee_response || '',
+      employee_response_at: ct.employee_response_at || null,
       status: ct.status || 'pending'
     }));
 
@@ -2576,16 +2589,32 @@ const getSelectedTemplates = async (req, res) => {
   }
 };
 
-// Update admin comment for a template
+// Update admin comment for a template (ADMIN ONLY)
 const updateTemplateComment = async (req, res) => {
   try {
+    // Check if user is admin
+    const userRole = req.user?.role;
+    if (userRole !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        error: 'Access denied. Only admins can update template comments and review status.'
+      });
+    }
+
     const { templateId } = req.params;
-    const { admin_comment } = req.body;
+    const { admin_comment, admin_remark, review_status } = req.body;
     
-    console.log(`💬 Updating admin comment for template ${templateId}...`);
+    console.log(`💬 Admin ${req.user?.id} updating admin comment/status for template ${templateId}...`);
+    console.log(`📝 Data received:`, { admin_comment, admin_remark, review_status });
+    
+    // Build update object with only provided fields
+    const updateData = {};
+    if (admin_comment !== undefined) updateData.admin_comment = admin_comment;
+    if (admin_remark !== undefined) updateData.admin_remark = admin_remark;
+    if (review_status !== undefined) updateData.review_status = review_status;
     
     const updatedTemplate = await models.CompanyTemplate.update(
-      { admin_comment },
+      updateData,
       { 
         where: { id: templateId },
         returning: true
@@ -2599,11 +2628,12 @@ const updateTemplateComment = async (req, res) => {
       });
     }
     
-    console.log(`✅ Admin comment updated for template ${templateId}`);
+    console.log(`✅ Template updated for template ${templateId}`);
+    console.log(`📋 Updated template:`, updatedTemplate[1][0]);
     
     res.json({
       success: true,
-      message: 'Admin comment updated successfully',
+      message: 'Admin comment and status updated successfully',
       template: updatedTemplate[1][0]
     });
     
@@ -2617,34 +2647,61 @@ const updateTemplateComment = async (req, res) => {
   }
 };
 
-// Update employee response for a template
+// Update employee response for a template (EMPLOYEE ONLY - Cannot edit existing responses)
 const updateEmployeeResponse = async (req, res) => {
   try {
     const { templateId } = req.params;
     const { employee_response } = req.body;
     
-    console.log(`💬 Updating employee response for template ${templateId}...`);
+    // Check if template exists and if it already has an employee response
+    const existingTemplate = await models.CompanyTemplate.findOne({
+      where: { id: templateId }
+    });
     
-    const updatedTemplate = await models.CompanyTemplate.update(
-      { employee_response },
-      { 
-        where: { id: templateId },
-        returning: true
-      }
-    );
-    
-    if (updatedTemplate[0] === 0) {
+    if (!existingTemplate) {
       return res.status(404).json({
         success: false,
         error: 'Template not found'
       });
     }
     
-    console.log(`✅ Employee response updated for template ${templateId}`);
+    // Prevent editing existing responses - employees can only add a response once
+    if (existingTemplate.employee_response && existingTemplate.employee_response.trim() !== '') {
+      return res.status(403).json({
+        success: false,
+        error: 'Cannot edit existing response. Your response has already been saved and cannot be modified. Please contact the admin if you need to add more information.'
+      });
+    }
+    
+    console.log(`💬 Employee ${req.user?.id} adding response for template ${templateId}...`);
+    
+    // Only allow adding new response if one doesn't exist
+    const updatedTemplate = await models.CompanyTemplate.update(
+      { 
+        employee_response,
+        employee_response_at: new Date()
+      },
+      { 
+        where: { 
+          id: templateId,
+          employee_response: null // Only update if response is null
+        },
+        returning: true
+      }
+    );
+    
+    if (updatedTemplate[0] === 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'Cannot update response. A response already exists for this template.'
+      });
+    }
+    
+    console.log(`✅ Employee response saved for template ${templateId}`);
     
     res.json({
       success: true,
-      message: 'Employee response updated successfully',
+      message: 'Employee response saved successfully. Note: This response cannot be edited once saved.',
       template: updatedTemplate[1][0]
     });
     
@@ -2724,6 +2781,325 @@ const getTemplatePreview = async (req, res) => {
   }
 };
 
+// Get employee performance metrics
+const getEmployeePerformance = async (req, res) => {
+  try {
+    // Check if user is admin
+    const userRole = req.user?.role;
+    if (userRole !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        error: 'Access denied. Only admins can view employee performance.'
+      });
+    }
+
+    console.log('📊 Fetching employee performance metrics...');
+
+    // Get all employees (non-admin users)
+    const { Op } = require('sequelize');
+    const employees = await models.User.findAll({
+      where: {
+        role: { [Op.ne]: 'admin' }
+      },
+      attributes: ['id', 'name', 'email', 'role']
+    });
+
+    // Get all templates with review status
+    const allTemplates = await models.CompanyTemplate.findAll({
+      include: [
+        {
+          model: models.User,
+          as: 'selectedByUser',
+          attributes: ['id', 'name', 'email']
+        }
+      ]
+    });
+
+    // Fetch case information separately for companies
+    const companyIds = [...new Set(allTemplates.map(t => t.company_id).filter(Boolean))];
+    const companies = await models.Company.findAll({
+      where: { id: { [Op.in]: companyIds } },
+      attributes: ['id', 'company_name', 'case_id']
+    });
+    
+    // Fetch cases for these companies
+    const caseIds = [...new Set(companies.map(c => c.case_id).filter(Boolean))];
+    const cases = await models.Case.findAll({
+      where: { id: { [Op.in]: caseIds } },
+      attributes: ['id', 'case_title', 'case_id']
+    });
+    
+    // Create a map of company_id to case info
+    const companyCaseMap = {};
+    companies.forEach(company => {
+      const caseData = cases.find(c => c.id === company.case_id);
+      companyCaseMap[company.id] = caseData || null;
+    });
+
+    // Calculate performance metrics for each employee
+    const performanceData = employees.map(employee => {
+      // Get templates selected by this employee
+      const employeeTemplates = allTemplates.filter(t => 
+        t.selected_by === employee.id || 
+        (t.selectedByUser && t.selectedByUser.id === employee.id)
+      );
+
+      // Count templates marked as "need_to_improve"
+      const needImprovementCount = employeeTemplates.filter(t => 
+        t.review_status === 'need_to_improve'
+      ).length;
+
+      // Count templates approved (done)
+      const approvedCount = employeeTemplates.filter(t => 
+        t.review_status === 'done'
+      ).length;
+
+      // Count templates pending review
+      const pendingCount = employeeTemplates.filter(t => 
+        !t.review_status || t.review_status === ''
+      ).length;
+
+      // Count resubmissions (templates that have employee_response after being marked need_to_improve)
+      const resubmissionCount = employeeTemplates.filter(t => 
+        t.review_status === 'need_to_improve' && 
+        t.employee_response && 
+        t.employee_response.trim() !== ''
+      ).length;
+
+      // Count total templates submitted
+      const totalTemplates = employeeTemplates.length;
+
+      // Count unique companies
+      const uniqueCompanies = new Set(
+        employeeTemplates
+          .filter(t => t.company_id)
+          .map(t => t.company_id)
+      ).size;
+
+      // Count unique cases
+      const uniqueCases = new Set(
+        employeeTemplates
+          .filter(t => {
+            const company = companies.find(c => c.id === t.company_id);
+            return company && companyCaseMap[company.id];
+          })
+          .map(t => {
+            const company = companies.find(c => c.id === t.company_id);
+            return company && companyCaseMap[company.id] ? companyCaseMap[company.id].id : null;
+          })
+          .filter(Boolean)
+      ).size;
+
+      // Calculate approval rate
+      const approvalRate = totalTemplates > 0 
+        ? Math.round((approvedCount / totalTemplates) * 100) 
+        : 0;
+
+      // Calculate improvement needed rate
+      const improvementRate = totalTemplates > 0 
+        ? Math.round((needImprovementCount / totalTemplates) * 100) 
+        : 0;
+
+      // Calculate resubmission rate (how many times they had to resubmit)
+      const resubmissionRate = needImprovementCount > 0 
+        ? Math.round((resubmissionCount / needImprovementCount) * 100) 
+        : 0;
+
+      return {
+        employee_id: employee.id,
+        employee_name: employee.name,
+        employee_email: employee.email,
+        employee_role: employee.role,
+        total_templates: totalTemplates,
+        approved_count: approvedCount,
+        need_improvement_count: needImprovementCount,
+        pending_count: pendingCount,
+        resubmission_count: resubmissionCount,
+        unique_companies: uniqueCompanies,
+        unique_cases: uniqueCases,
+        approval_rate: approvalRate,
+        improvement_rate: improvementRate,
+        resubmission_rate: resubmissionRate,
+        performance_score: approvalRate - (improvementRate * 0.5) // Penalize for improvements needed
+      };
+    });
+
+    // Sort by performance score (highest first)
+    performanceData.sort((a, b) => b.performance_score - a.performance_score);
+
+    console.log(`✅ Calculated performance for ${performanceData.length} employees`);
+
+    res.json({
+      success: true,
+      performance: performanceData,
+      summary: {
+        total_employees: performanceData.length,
+        total_templates: performanceData.reduce((sum, emp) => sum + emp.total_templates, 0),
+        total_need_improvement: performanceData.reduce((sum, emp) => sum + emp.need_improvement_count, 0),
+        total_resubmissions: performanceData.reduce((sum, emp) => sum + emp.resubmission_count, 0),
+        average_approval_rate: performanceData.length > 0
+          ? Math.round(performanceData.reduce((sum, emp) => sum + emp.approval_rate, 0) / performanceData.length)
+          : 0
+      }
+    });
+
+  } catch (error) {
+    console.error('Error getting employee performance:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch employee performance',
+      details: error.message
+    });
+  }
+};
+
+// Get detailed templates for a specific employee and metric type
+const getEmployeePerformanceDetails = async (req, res) => {
+  try {
+    // Check if user is admin
+    const userRole = req.user?.role;
+    if (userRole !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        error: 'Access denied. Only admins can view employee performance details.'
+      });
+    }
+
+    const { employeeId } = req.params;
+    const { type } = req.query; // 'approved', 'need_improvement', 'resubmission'
+
+    console.log(`📊 Fetching performance details for employee ${employeeId}, type: ${type}`);
+
+    const { Op } = require('sequelize');
+
+    // Build where clause based on type
+    let whereClause = {
+      selected_by: employeeId
+    };
+
+    if (type === 'approved') {
+      whereClause.review_status = 'done';
+    } else if (type === 'need_improvement') {
+      whereClause.review_status = 'need_to_improve';
+    } else if (type === 'resubmission') {
+      // For resubmissions, we need templates marked need_to_improve that have employee_response
+      whereClause.review_status = 'need_to_improve';
+      // We'll filter for employee_response in JavaScript after fetching
+    }
+
+    // Get templates - for resubmission, we'll filter after fetching
+    let templates;
+    if (type === 'resubmission') {
+      // Fetch all need_to_improve templates, then filter for those with responses
+      templates = await models.CompanyTemplate.findAll({
+        where: {
+          selected_by: employeeId,
+          review_status: 'need_to_improve'
+        },
+        include: [
+          {
+            model: models.User,
+            as: 'selectedByUser',
+            attributes: ['id', 'name', 'email']
+          }
+        ],
+        order: [['updated_at', 'DESC']]
+      });
+      // Filter for templates with employee_response
+      templates = templates.filter(t => 
+        t.employee_response && 
+        t.employee_response.trim() !== ''
+      );
+    } else {
+      templates = await models.CompanyTemplate.findAll({
+        where: whereClause,
+        include: [
+          {
+            model: models.User,
+            as: 'selectedByUser',
+            attributes: ['id', 'name', 'email']
+          }
+        ],
+        order: [['updated_at', 'DESC']]
+      });
+    }
+
+    // Get companies for these templates
+    const companyIds = [...new Set(templates.map(t => t.company_id).filter(Boolean))];
+    const companies = await models.Company.findAll({
+      where: { id: { [Op.in]: companyIds } },
+      attributes: ['id', 'company_name', 'case_id']
+    });
+
+    // Get cases for these companies
+    const caseIds = [...new Set(companies.map(c => c.case_id).filter(Boolean))];
+    const cases = await models.Case.findAll({
+      where: { id: { [Op.in]: caseIds } },
+      attributes: ['id', 'case_title', 'case_id']
+    });
+
+    // Create a map of company_id to case info
+    const companyCaseMap = {};
+    companies.forEach(company => {
+      const caseData = cases.find(c => c.id === company.case_id);
+      companyCaseMap[company.id] = {
+        company_name: company.company_name,
+        case: caseData
+      };
+    });
+
+    // Format response
+    const formattedTemplates = templates.map(template => {
+      const companyInfo = companyCaseMap[template.company_id] || {};
+      
+      return {
+        id: template.id,
+        template_name: template.template_name,
+        template_category: template.template_category,
+        template_file: template.template_path,
+        review_status: template.review_status,
+        admin_comment: template.admin_comment,
+        admin_remark: template.admin_remark,
+        employee_response: template.employee_response,
+        employee_response_at: template.employee_response_at,
+        selected_at: template.selected_at,
+        updated_at: template.updated_at,
+        company_id: template.company_id,
+        company_name: companyInfo.company_name || 'Unknown Company',
+        case_id: companyInfo.case ? companyInfo.case.id : null,
+        case_title: companyInfo.case ? companyInfo.case.case_title : null,
+        case_case_id: companyInfo.case ? companyInfo.case.case_id : null,
+      };
+    });
+
+    // For resubmission type, filter to only those with employee_response
+    let finalTemplates = formattedTemplates;
+    if (type === 'resubmission') {
+      finalTemplates = formattedTemplates.filter(t => 
+        t.employee_response && 
+        t.employee_response.trim() !== '' &&
+        t.review_status === 'need_to_improve'
+      );
+    }
+
+    console.log(`✅ Found ${finalTemplates.length} templates for employee ${employeeId}, type: ${type}`);
+
+    res.json({
+      success: true,
+      templates: finalTemplates,
+      count: finalTemplates.length
+    });
+
+  } catch (error) {
+    console.error('Error getting employee performance details:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch employee performance details',
+      details: error.message
+    });
+  }
+};
+
 module.exports = {
   getCompanyTemplates,
   updateCompanyTemplates,
@@ -2734,5 +3110,7 @@ module.exports = {
   getSelectedTemplates,
   updateTemplateComment,
   updateEmployeeResponse,
-  getTemplatePreview
+  getTemplatePreview,
+  getEmployeePerformance,
+  getEmployeePerformanceDetails
 };
