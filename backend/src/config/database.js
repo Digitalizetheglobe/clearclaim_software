@@ -20,7 +20,13 @@ const sequelize = new Sequelize(
       timestamps: true,
       underscored: true,
       freezeTableName: true
-    }
+    },
+    dialectOptions: process.env.DB_SSL === 'true' ? {
+      ssl: {
+        require: true,
+        rejectUnauthorized: false
+      }
+    } : {}
   }
 );
 
