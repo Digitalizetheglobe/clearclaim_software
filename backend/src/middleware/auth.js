@@ -35,13 +35,20 @@ const auth = (req, res, next) => {
 };
 
 // Role-based authorization middleware
+// Supports both single role (string) and multiple roles (array)
 const requireRole = (roles) => {
   return (req, res, next) => {
     if (!req.user) {
       return res.status(401).json({ error: 'Authentication required.' });
     }
     
-    if (!roles.includes(req.user.role)) {
+    // Get user roles (can be array or single string for backward compatibility)
+    const userRoles = Array.isArray(req.user.role) ? req.user.role : [req.user.role];
+    
+    // Check if user has any of the required roles
+    const hasRequiredRole = roles.some(requiredRole => userRoles.includes(requiredRole));
+    
+    if (!hasRequiredRole) {
       return res.status(403).json({ error: 'Access denied. Insufficient permissions.' });
     }
     

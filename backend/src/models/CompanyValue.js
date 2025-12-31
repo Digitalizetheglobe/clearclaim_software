@@ -30,6 +30,11 @@ module.exports = (sequelize) => {
         model: 'users',
         key: 'id'
       }
+    },
+    reviewer_comment: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+      comment: 'Comments from data reviewer about this specific field'
     }
   }, {
     tableName: 'company_values',

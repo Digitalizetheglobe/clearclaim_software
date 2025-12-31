@@ -16,8 +16,9 @@ module.exports = (sequelize) => {
       allowNull: false
     },
     role: {
-      type: DataTypes.ENUM('admin', 'sales', 'employee'),
-      defaultValue: 'employee'
+      type: DataTypes.JSONB, // Store as array of roles: ['employee', 'data_reviewer']
+      defaultValue: ['employee'],
+      allowNull: false
     }
   }, {
     tableName: 'users'

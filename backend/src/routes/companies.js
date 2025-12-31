@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { auth } = require('../middleware/auth');
 const {
+  getAllCompanies,
   getCompaniesByCase,
   createCompany,
   getCompanyDetails,
@@ -10,13 +11,20 @@ const {
   updateCompanyStatus,
   deleteCompany,
   addJointHolder,
-  removeJointHolder
+  removeJointHolder,
+  updateReviewerComment,
+  approveCompanyReview,
+  rejectCompanyReview,
+  duplicateCompany
 } = require('../controllers/companyController');
 
 const { deleteCase } = require('../controllers/caseController');
 
 // Apply authentication middleware to all routes
 router.use(auth);
+
+// Get all companies (with optional query filters: assigned_to, status, case_id)
+router.get('/', getAllCompanies);
 
 // Get all companies for a specific case
 router.get('/case/:caseId', getCompaniesByCase);
@@ -48,5 +56,18 @@ router.post('/:companyId/joint-holders', addJointHolder);
 
 // Remove joint holder fields
 router.delete('/:companyId/joint-holders', removeJointHolder);
+
+// Data Reviewer endpoints
+// Update reviewer comment for a field
+router.patch('/:companyId/reviewer-comment', updateReviewerComment);
+
+// Approve company after review
+router.post('/:companyId/approve-review', approveCompanyReview);
+
+// Reject company and send back to employee
+router.post('/:companyId/reject-review', rejectCompanyReview);
+
+// Duplicate company with all its values
+router.post('/:companyId/duplicate', duplicateCompany);
 
 module.exports = router;

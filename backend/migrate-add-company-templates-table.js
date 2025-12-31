@@ -88,8 +88,9 @@ async function createCompanyTemplatesTable() {
     
     for (const template of defaultTemplates) {
       await sequelize.query(`
-        INSERT IGNORE INTO company_templates (template_name, template_category, template_path) 
-        VALUES (?, ?, ?)
+        INSERT INTO company_templates (template_name, template_category, template_path) 
+        VALUES ($1, $2, $3)
+        ON CONFLICT DO NOTHING
       `, {
         replacements: [template.name, template.category, template.path]
       });

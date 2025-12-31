@@ -1,5 +1,44 @@
 const { Company, CompanyValue, User, Case, CaseField } = require('../models');
 
+// Get all companies (with optional filters)
+const getAllCompanies = async (req, res) => {
+  try {
+    const { assigned_to, status, case_id } = req.query;
+    
+    const whereClause = {};
+    if (assigned_to) whereClause.assigned_to = assigned_to;
+    if (status) whereClause.status = status;
+    if (case_id) whereClause.case_id = case_id;
+    
+    const companies = await Company.findAll({
+      where: whereClause,
+      include: [
+        {
+          model: User,
+          as: 'assignedUser',
+          attributes: ['id', 'name', 'email']
+        },
+        {
+          model: User,
+          as: 'createdByUser',
+          attributes: ['id', 'name', 'email']
+        },
+        {
+          model: Case,
+          as: 'case',
+          attributes: ['id', 'case_id', 'case_title', 'client_name']
+        }
+      ],
+      order: [['createdAt', 'DESC']]
+    });
+
+    res.json({ companies });
+  } catch (error) {
+    console.error('Error fetching companies:', error);
+    res.status(500).json({ error: 'Failed to fetch companies' });
+  }
+};
+
 // Get all companies for a specific case
 const getCompaniesByCase = async (req, res) => {
   try {
@@ -117,16 +156,21 @@ const getCompanyValues = async (req, res) => {
       where: { company_id: companyId }
     });
 
-    // Create a map of field values
+    // Create a map of field values and reviewer comments
     const valuesMap = {};
+    const commentsMap = {};
     companyValues.forEach(value => {
       valuesMap[value.field_key] = value.field_value;
+      if (value.reviewer_comment) {
+        commentsMap[value.field_key] = value.reviewer_comment;
+      }
     });
 
-    // Combine fields with their values
+    // Combine fields with their values and comments
     const fieldsWithValues = caseFields.map(field => ({
       ...field.toJSON(),
-      field_value: valuesMap[field.field_key] || ''
+      field_value: valuesMap[field.field_key] || '',
+      reviewer_comment: commentsMap[field.field_key] || null
     }));
 
     res.json({ fields: fieldsWithValues });
@@ -172,18 +216,37 @@ const updateCompanyValues = async (req, res) => {
 const updateCompanyStatus = async (req, res) => {
   try {
     const { companyId } = req.params;
-    const { status } = req.body;
+    const { status, assigned_to } = req.body;
 
     const company = await Company.findByPk(companyId);
     if (!company) {
       return res.status(404).json({ error: 'Company not found' });
     }
 
-    await company.update({ status });
+    const updateData = {};
+    if (status !== undefined) {
+      updateData.status = status;
+    }
+    if (assigned_to !== undefined) {
+      updateData.assigned_to = assigned_to || null;
+    }
+
+    await company.update(updateData);
+
+    // Fetch updated company with user details
+    const updatedCompany = await Company.findByPk(companyId, {
+      include: [
+        {
+          model: User,
+          as: 'assignedUser',
+          attributes: ['id', 'name', 'email']
+        }
+      ]
+    });
 
     res.json({ 
-      message: 'Company status updated successfully',
-      company 
+      message: 'Company updated successfully',
+      company: updatedCompany 
     });
   } catch (error) {
     console.error('Error updating company status:', error);
@@ -318,6 +381,160 @@ const addJointHolder = async (req, res) => {
   }
 };
 
+// Update reviewer comment for a specific field
+const updateReviewerComment = async (req, res) => {
+  try {
+    const { companyId } = req.params;
+    const { field_key, reviewer_comment } = req.body;
+    const reviewerId = req.user.id;
+
+    // Check if user is a data reviewer or template reviewer
+    const reviewer = await User.findByPk(reviewerId);
+    if (!reviewer) {
+      return res.status(403).json({ error: 'User not found' });
+    }
+    
+    // Handle roles as array or string (supporting both formats)
+    const userRoles = Array.isArray(reviewer.role) ? reviewer.role : (reviewer.role ? [reviewer.role] : []);
+    const isDataReviewer = userRoles.includes('data_reviewer');
+    const isTemplateReviewer = userRoles.includes('template_reviewer');
+    
+    if (!isDataReviewer && !isTemplateReviewer) {
+      return res.status(403).json({ error: 'Only data reviewers and template reviewers can add comments' });
+    }
+
+    // Check if company exists and is assigned to this reviewer
+    const company = await Company.findByPk(companyId);
+    if (!company) {
+      return res.status(404).json({ error: 'Company not found' });
+    }
+
+    if (company.assigned_to !== reviewerId) {
+      return res.status(403).json({ error: 'You can only comment on companies assigned to you' });
+    }
+
+    // Update or create company value with reviewer comment
+    const [companyValue, created] = await CompanyValue.findOrCreate({
+      where: {
+        company_id: companyId,
+        field_key: field_key
+      },
+      defaults: {
+        company_id: companyId,
+        field_key: field_key,
+        field_value: '',
+        last_updated_by: reviewerId,
+        reviewer_comment: reviewer_comment || null
+      }
+    });
+
+    if (!created) {
+      companyValue.reviewer_comment = reviewer_comment || null;
+      await companyValue.save();
+    }
+
+    res.json({
+      message: 'Reviewer comment updated successfully',
+      companyValue: companyValue.toJSON()
+    });
+  } catch (error) {
+    console.error('Error updating reviewer comment:', error);
+    res.status(500).json({ error: 'Failed to update reviewer comment' });
+  }
+};
+
+// Approve company after review (Data Reviewer)
+const approveCompanyReview = async (req, res) => {
+  try {
+    const { companyId } = req.params;
+    const reviewerId = req.user.id;
+
+    // Check if user is a data reviewer or template reviewer
+    const reviewer = await User.findByPk(reviewerId);
+    if (!reviewer) {
+      return res.status(403).json({ error: 'User not found' });
+    }
+    
+    // Handle roles as array or string (supporting both formats)
+    const userRoles = Array.isArray(reviewer.role) ? reviewer.role : (reviewer.role ? [reviewer.role] : []);
+    const isDataReviewer = userRoles.includes('data_reviewer');
+    const isTemplateReviewer = userRoles.includes('template_reviewer');
+    
+    if (!isDataReviewer && !isTemplateReviewer) {
+      return res.status(403).json({ error: 'Only data reviewers and template reviewers can approve companies' });
+    }
+
+    // Check if company exists and is assigned to this reviewer
+    const company = await Company.findByPk(companyId);
+    if (!company) {
+      return res.status(404).json({ error: 'Company not found' });
+    }
+
+    if (company.assigned_to !== reviewerId) {
+      return res.status(403).json({ error: 'You can only approve companies assigned to you' });
+    }
+
+    // Update company status to completed
+    await company.update({ status: 'completed' });
+
+    res.json({
+      message: 'Company approved successfully. Ready for template generation.',
+      company: company.toJSON()
+    });
+  } catch (error) {
+    console.error('Error approving company:', error);
+    res.status(500).json({ error: 'Failed to approve company' });
+  }
+};
+
+// Reject company and send back to employee (Data Reviewer)
+const rejectCompanyReview = async (req, res) => {
+  try {
+    const { companyId } = req.params;
+    const { rejection_reason } = req.body;
+    const reviewerId = req.user.id;
+
+    // Check if user is a data reviewer or template reviewer
+    const reviewer = await User.findByPk(reviewerId);
+    if (!reviewer) {
+      return res.status(403).json({ error: 'User not found' });
+    }
+    
+    // Handle roles as array or string (supporting both formats)
+    const userRoles = Array.isArray(reviewer.role) ? reviewer.role : (reviewer.role ? [reviewer.role] : []);
+    const isDataReviewer = userRoles.includes('data_reviewer');
+    const isTemplateReviewer = userRoles.includes('template_reviewer');
+    
+    if (!isDataReviewer && !isTemplateReviewer) {
+      return res.status(403).json({ error: 'Only data reviewers and template reviewers can reject companies' });
+    }
+
+    // Check if company exists and is assigned to this reviewer
+    const company = await Company.findByPk(companyId);
+    if (!company) {
+      return res.status(404).json({ error: 'Company not found' });
+    }
+
+    if (company.assigned_to !== reviewerId) {
+      return res.status(403).json({ error: 'You can only reject companies assigned to you' });
+    }
+
+    // Update company status back to in_progress and unassign from reviewer
+    await company.update({
+      status: 'in_progress',
+      assigned_to: company.created_by // Reassign to original creator
+    });
+
+    res.json({
+      message: 'Company rejected and sent back to employee for corrections.',
+      company: company.toJSON()
+    });
+  } catch (error) {
+    console.error('Error rejecting company:', error);
+    res.status(500).json({ error: 'Failed to reject company' });
+  }
+};
+
 // Remove joint holder fields
 const removeJointHolder = async (req, res) => {
   try {
@@ -370,7 +587,75 @@ const removeJointHolder = async (req, res) => {
   }
 };
 
+// Duplicate a company with all its values
+const duplicateCompany = async (req, res) => {
+  try {
+    const { companyId } = req.params;
+    const { company_name, assigned_to } = req.body;
+    const created_by = req.user.id;
+
+    // Check if original company exists
+    const originalCompany = await Company.findByPk(companyId);
+    if (!originalCompany) {
+      return res.status(404).json({ error: 'Company not found' });
+    }
+
+    // Validate company name
+    if (!company_name || company_name.trim() === '') {
+      return res.status(400).json({ error: 'Company name is required' });
+    }
+
+    // Create the new company
+    const newCompany = await Company.create({
+      case_id: originalCompany.case_id,
+      company_name: company_name.trim(),
+      created_by,
+      assigned_to: assigned_to ? parseInt(assigned_to) : originalCompany.assigned_to,
+      status: 'pending' // Start with pending status for the duplicate
+    });
+
+    // Get all company values from the original company
+    const originalValues = await CompanyValue.findAll({
+      where: { company_id: companyId }
+    });
+
+    // Copy all company values to the new company
+    const newValues = [];
+    for (const originalValue of originalValues) {
+      const newValue = await CompanyValue.create({
+        company_id: newCompany.id,
+        field_key: originalValue.field_key,
+        field_value: originalValue.field_value, // Copy the value
+        last_updated_by: created_by
+        // Note: We don't copy reviewer_comment as it's specific to the original review
+      });
+      newValues.push(newValue);
+    }
+
+    // Fetch the created company with user details
+    const createdCompany = await Company.findByPk(newCompany.id, {
+      include: [
+        {
+          model: User,
+          as: 'assignedUser',
+          attributes: ['id', 'name', 'email']
+        }
+      ]
+    });
+
+    res.status(201).json({
+      message: 'Company duplicated successfully',
+      company: createdCompany,
+      valuesCopied: newValues.length
+    });
+  } catch (error) {
+    console.error('Error duplicating company:', error);
+    res.status(500).json({ error: 'Failed to duplicate company' });
+  }
+};
+
 module.exports = {
+  getAllCompanies,
   getCompaniesByCase,
   createCompany,
   getCompanyDetails,
@@ -379,5 +664,9 @@ module.exports = {
   updateCompanyStatus,
   deleteCompany,
   addJointHolder,
-  removeJointHolder
+  removeJointHolder,
+  updateReviewerComment,
+  approveCompanyReview,
+  rejectCompanyReview,
+  duplicateCompany
 };
