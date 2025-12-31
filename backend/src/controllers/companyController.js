@@ -388,6 +388,17 @@ const updateReviewerComment = async (req, res) => {
     const { field_key, reviewer_comment } = req.body;
     const reviewerId = req.user.id;
 
+    // Validate required fields
+    if (!field_key) {
+      return res.status(400).json({ error: 'field_key is required' });
+    }
+
+    // Convert companyId to integer
+    const companyIdInt = parseInt(companyId, 10);
+    if (isNaN(companyIdInt)) {
+      return res.status(400).json({ error: 'Invalid company ID' });
+    }
+
     // Check if user is a data reviewer or template reviewer
     const reviewer = await User.findByPk(reviewerId);
     if (!reviewer) {
@@ -404,32 +415,37 @@ const updateReviewerComment = async (req, res) => {
     }
 
     // Check if company exists and is assigned to this reviewer
-    const company = await Company.findByPk(companyId);
+    const company = await Company.findByPk(companyIdInt);
     if (!company) {
       return res.status(404).json({ error: 'Company not found' });
     }
 
-    if (company.assigned_to !== reviewerId) {
+    // Convert to integers for comparison to avoid type mismatch
+    const assignedToInt = company.assigned_to ? parseInt(company.assigned_to, 10) : null;
+    const reviewerIdInt = parseInt(reviewerId, 10);
+    
+    if (assignedToInt !== reviewerIdInt) {
       return res.status(403).json({ error: 'You can only comment on companies assigned to you' });
     }
 
     // Update or create company value with reviewer comment
     const [companyValue, created] = await CompanyValue.findOrCreate({
       where: {
-        company_id: companyId,
+        company_id: companyIdInt,
         field_key: field_key
       },
       defaults: {
-        company_id: companyId,
+        company_id: companyIdInt,
         field_key: field_key,
         field_value: '',
-        last_updated_by: reviewerId,
+        last_updated_by: reviewerIdInt,
         reviewer_comment: reviewer_comment || null
       }
     });
 
     if (!created) {
       companyValue.reviewer_comment = reviewer_comment || null;
+      companyValue.last_updated_by = reviewerIdInt;
       await companyValue.save();
     }
 
@@ -439,7 +455,10 @@ const updateReviewerComment = async (req, res) => {
     });
   } catch (error) {
     console.error('Error updating reviewer comment:', error);
-    res.status(500).json({ error: 'Failed to update reviewer comment' });
+    res.status(500).json({ 
+      error: 'Failed to update reviewer comment',
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
   }
 };
 
