@@ -15,7 +15,8 @@ const {
   updateReviewerComment,
   approveCompanyReview,
   rejectCompanyReview,
-  duplicateCompany
+  duplicateCompany,
+  getReviewerStats
 } = require('../controllers/companyController');
 
 const { deleteCase } = require('../controllers/caseController');
@@ -58,6 +59,9 @@ router.post('/:companyId/joint-holders', addJointHolder);
 router.delete('/:companyId/joint-holders', removeJointHolder);
 
 // Data Reviewer endpoints
+// Get reviewer tracking statistics
+router.get('/reviewer/stats', getReviewerStats);
+
 // Update reviewer comment for a field
 router.patch('/:companyId/reviewer-comment', updateReviewerComment);
 

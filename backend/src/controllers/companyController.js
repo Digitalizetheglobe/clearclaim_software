@@ -1,4 +1,5 @@
 const { Company, CompanyValue, User, Case, CaseField } = require('../models');
+const { sequelize } = require('../config/database');
 
 // Get all companies (with optional filters)
 const getAllCompanies = async (req, res) => {
@@ -673,6 +674,77 @@ const duplicateCompany = async (req, res) => {
   }
 };
 
+// Get reviewer tracking statistics
+const getReviewerStats = async (req, res) => {
+  try {
+    const reviewerId = req.user.id;
+    
+    // Check if user is a data reviewer or template reviewer
+    const reviewer = await User.findByPk(reviewerId);
+    if (!reviewer) {
+      return res.status(403).json({ error: 'User not found' });
+    }
+    
+    // Handle roles as array or string (supporting both formats)
+    const userRoles = Array.isArray(reviewer.role) ? reviewer.role : (reviewer.role ? [reviewer.role] : []);
+    const isDataReviewer = userRoles.includes('data_reviewer');
+    const isTemplateReviewer = userRoles.includes('template_reviewer');
+    
+    if (!isDataReviewer && !isTemplateReviewer) {
+      return res.status(403).json({ error: 'Only data reviewers and template reviewers can access this endpoint' });
+    }
+
+    // Get statistics grouped by status
+    const statusStats = await Company.findAll({
+      where: { assigned_to: reviewerId },
+      attributes: [
+        'status',
+        [sequelize.fn('COUNT', sequelize.col('id')), 'count']
+      ],
+      group: ['status'],
+      raw: true
+    });
+
+    // Calculate total
+    const total = await Company.count({
+      where: { assigned_to: reviewerId }
+    });
+
+    // Format the response
+    const stats = {
+      inReview: 0,
+      completed: 0,
+      rejected: 0,
+      pending: 0,
+      inProgress: 0,
+      total: total
+    };
+
+    statusStats.forEach(stat => {
+      const status = stat.status;
+      const count = parseInt(stat.count);
+      
+      if (status === 'in_review') stats.inReview = count;
+      else if (status === 'completed') stats.completed = count;
+      else if (status === 'rejected') stats.rejected = count;
+      else if (status === 'pending') stats.pending = count;
+      else if (status === 'in_progress') stats.inProgress = count;
+    });
+
+    res.json({
+      success: true,
+      stats: stats,
+      breakdown: statusStats.map(stat => ({
+        status: stat.status,
+        count: parseInt(stat.count)
+      }))
+    });
+  } catch (error) {
+    console.error('Error fetching reviewer stats:', error);
+    res.status(500).json({ error: 'Failed to fetch reviewer statistics' });
+  }
+};
+
 module.exports = {
   getAllCompanies,
   getCompaniesByCase,
@@ -687,5 +759,6 @@ module.exports = {
   updateReviewerComment,
   approveCompanyReview,
   rejectCompanyReview,
-  duplicateCompany
+  duplicateCompany,
+  getReviewerStats
 };
