@@ -87,7 +87,23 @@ node migrate-add-review-status-fields.js
 
 ---
 
-### 6. Populate Case Fields (Optional but Recommended)
+### 6. Add Reviewer Comments Column
+```bash
+node migrate-add-reviewer-comments.js
+```
+**Purpose:** Adds `reviewer_comment` column to `company_values` table for data reviewers to add comments on specific fields.
+
+**Expected Output:**
+```
+🔄 Checking if reviewer_comment column exists in company_values table...
+📝 Adding reviewer_comment column to company_values table...
+✅ Reviewer comment field added successfully to company_values table
+Migration completed successfully
+```
+
+---
+
+### 7. Populate Case Fields (Optional but Recommended)
 ```bash
 node src/scripts/populateCaseFields.js
 ```
@@ -147,7 +163,10 @@ node migrate-add-deal-fields.js
 echo "5️⃣  Adding review status fields..."
 node migrate-add-review-status-fields.js
 
-echo "6️⃣  Populating case fields..."
+echo "6️⃣  Adding reviewer comments column..."
+node migrate-add-reviewer-comments.js
+
+echo "7️⃣  Populating case fields..."
 node src/scripts/populateCaseFields.js
 
 echo "✅ All migrations completed!"
