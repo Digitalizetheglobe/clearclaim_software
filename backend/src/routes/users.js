@@ -408,6 +408,36 @@ router.put('/:id', auth, requireRole(['admin']), async (req, res) => {
   }
 });
 
+// Delete user (Admin only)
+router.delete('/:id', auth, requireRole(['admin']), async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const user = await User.findByPk(id);
+    if (!user) {
+      return res.status(404).json({ error: 'User not found.' });
+    }
+
+    // Prevent self-deletion
+    const currentUserId = req.user?.id;
+    if (currentUserId && parseInt(id) === parseInt(currentUserId)) {
+      return res.status(400).json({ error: 'You cannot delete your own account.' });
+    }
+
+    await user.destroy();
+
+    res.json({ 
+      message: 'User deleted successfully'
+    });
+  } catch (error) {
+    console.error('Delete user error:', error);
+    res.status(500).json({ 
+      error: 'Failed to delete user.',
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
 // Get users with case summary (for dashboard)
 router.get('/summary/cases', async (req, res) => {
   try {
