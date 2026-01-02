@@ -10,6 +10,7 @@ const Company = require('./Company')(sequelize);
 const CompanyValue = require('./CompanyValue')(sequelize);
 const Claimant = require('./Claimant')(sequelize);
 const CompanyTemplate = require('./CompanyTemplate')(sequelize);
+const Notification = require('./Notification')(sequelize);
 
 // User - Case associations
 User.hasMany(Case, { 
@@ -165,6 +166,36 @@ Claimant.belongsTo(User, {
   as: 'lastUpdatedByUser' 
 });
 
+// User - Notification associations
+User.hasMany(Notification, { 
+  foreignKey: 'user_id', 
+  as: 'notifications' 
+});
+Notification.belongsTo(User, { 
+  foreignKey: 'user_id', 
+  as: 'user' 
+});
+
+// Company - Notification associations
+Company.hasMany(Notification, { 
+  foreignKey: 'company_id', 
+  as: 'notifications' 
+});
+Notification.belongsTo(Company, { 
+  foreignKey: 'company_id', 
+  as: 'company' 
+});
+
+// Case - Notification associations
+Case.hasMany(Notification, { 
+  foreignKey: 'case_id', 
+  as: 'notifications' 
+});
+Notification.belongsTo(Case, { 
+  foreignKey: 'case_id', 
+  as: 'case' 
+});
+
 module.exports = {
   User,
   Case,
@@ -174,5 +205,6 @@ module.exports = {
   Company,
   CompanyValue,
   Claimant,
-  CompanyTemplate
+  CompanyTemplate,
+  Notification
 };

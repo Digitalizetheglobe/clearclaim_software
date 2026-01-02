@@ -20,6 +20,7 @@ const companyRoutes = require('./src/routes/companies');
 const claimantRoutes = require('./src/routes/claimants');
 const companyTemplateRoutes = require('./src/routes/companyTemplates');
 const caseTemplateRoutes = require('./src/routes/caseTemplates');
+const notificationRoutes = require('./src/routes/notifications');
 
 app.use('/api/users', userRoutes);
 app.use('/api/cases', caseRoutes);
@@ -28,6 +29,7 @@ app.use('/api/companies', companyRoutes);
 app.use('/api/claimants', claimantRoutes);
 app.use('/api/company-templates', companyTemplateRoutes);
 app.use('/api/case-templates', caseTemplateRoutes);
+app.use('/api/notifications', notificationRoutes);
 
 
 

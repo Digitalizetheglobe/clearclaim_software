@@ -1,4 +1,4 @@
-const { Company, CompanyValue, User, Case, CaseField, CompanyTemplate } = require('../models');
+const { Company, CompanyValue, User, Case, CaseField, CompanyTemplate, Notification } = require('../models');
 const { sequelize } = require('../config/database');
 
 // Get all companies (with optional filters)
@@ -497,6 +497,38 @@ const approveCompanyReview = async (req, res) => {
     // Update company status to completed
     await company.update({ status: 'completed' });
 
+    // Get company with case details for notification
+    const companyWithCase = await Company.findByPk(companyId, {
+      include: [{
+        model: Case,
+        as: 'case',
+        attributes: ['id', 'case_id', 'case_title', 'client_name']
+      }]
+    });
+
+    // Determine review type and create appropriate notification
+    const reviewType = isDataReviewer ? 'data_review' : 'template_review';
+    
+    // Create notification for the employee who created the company
+    if (company.created_by) {
+      await Notification.create({
+        user_id: company.created_by,
+        company_id: companyId,
+        case_id: company.case_id,
+        type: isDataReviewer ? 'data_review_approved' : 'template_review_approved',
+        title: `${isDataReviewer ? 'Data Review' : 'Template Review'} Approved`,
+        message: `Your company "${company.company_name}" has been approved by ${reviewer.name}. ${companyWithCase.case ? `Case: ${companyWithCase.case.case_title}` : ''}`,
+        metadata: {
+          reviewer_name: reviewer.name,
+          reviewer_email: reviewer.email,
+          review_type: reviewType,
+          company_name: company.company_name,
+          case_title: companyWithCase.case?.case_title,
+          case_id: companyWithCase.case?.case_id
+        }
+      });
+    }
+
     res.json({
       message: 'Company approved successfully. Ready for template generation.',
       company: company.toJSON()
@@ -544,6 +576,39 @@ const rejectCompanyReview = async (req, res) => {
       status: 'in_progress',
       assigned_to: company.created_by // Reassign to original creator
     });
+
+    // Get company with case details for notification
+    const companyWithCase = await Company.findByPk(companyId, {
+      include: [{
+        model: Case,
+        as: 'case',
+        attributes: ['id', 'case_id', 'case_title', 'client_name']
+      }]
+    });
+
+    // Determine review type and create appropriate notification
+    const reviewType = isDataReviewer ? 'data_review' : 'template_review';
+    
+    // Create notification for the employee who created the company
+    if (company.created_by) {
+      await Notification.create({
+        user_id: company.created_by,
+        company_id: companyId,
+        case_id: company.case_id,
+        type: isDataReviewer ? 'data_review_rejected' : 'template_review_rejected',
+        title: `${isDataReviewer ? 'Data Review' : 'Template Review'} Rejected`,
+        message: `Your company "${company.company_name}" has been rejected by ${reviewer.name} and sent back for corrections. ${rejection_reason ? `Reason: ${rejection_reason}` : ''} ${companyWithCase.case ? `Case: ${companyWithCase.case.case_title}` : ''}`,
+        metadata: {
+          reviewer_name: reviewer.name,
+          reviewer_email: reviewer.email,
+          review_type: reviewType,
+          rejection_reason: rejection_reason || 'No reason provided',
+          company_name: company.company_name,
+          case_title: companyWithCase.case?.case_title,
+          case_id: companyWithCase.case?.case_id
+        }
+      });
+    }
 
     res.json({
       message: 'Company rejected and sent back to employee for corrections.',
