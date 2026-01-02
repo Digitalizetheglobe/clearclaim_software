@@ -16,7 +16,8 @@ const {
   approveCompanyReview,
   rejectCompanyReview,
   duplicateCompany,
-  getReviewerStats
+  getReviewerStats,
+  submitForTemplateReview
 } = require('../controllers/companyController');
 
 const { deleteCase } = require('../controllers/caseController');
@@ -70,6 +71,9 @@ router.post('/:companyId/approve-review', approveCompanyReview);
 
 // Reject company and send back to employee
 router.post('/:companyId/reject-review', rejectCompanyReview);
+
+// Submit company for template review (separate from data review)
+router.post('/:companyId/submit-template-review', submitForTemplateReview);
 
 // Duplicate company with all its values
 router.post('/:companyId/duplicate', duplicateCompany);

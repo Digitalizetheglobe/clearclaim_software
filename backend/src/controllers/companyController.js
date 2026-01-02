@@ -1,4 +1,4 @@
-const { Company, CompanyValue, User, Case, CaseField } = require('../models');
+const { Company, CompanyValue, User, Case, CaseField, CompanyTemplate } = require('../models');
 const { sequelize } = require('../config/database');
 
 // Get all companies (with optional filters)
@@ -745,6 +745,110 @@ const getReviewerStats = async (req, res) => {
   }
 };
 
+// Submit company for template review (separate from data review)
+const submitForTemplateReview = async (req, res) => {
+  try {
+    const { companyId } = req.params;
+    const { template_reviewer_id } = req.body;
+
+    if (!template_reviewer_id) {
+      return res.status(400).json({ error: 'Template reviewer ID is required' });
+    }
+
+    const company = await Company.findByPk(companyId);
+    if (!company) {
+      return res.status(404).json({ error: 'Company not found' });
+    }
+
+    // Check if template reviewer exists
+    const templateReviewer = await User.findByPk(template_reviewer_id);
+    if (!templateReviewer) {
+      return res.status(404).json({ error: 'Template reviewer not found' });
+    }
+
+    // Check if user is a template reviewer
+    const userRoles = Array.isArray(templateReviewer.role) 
+      ? templateReviewer.role 
+      : (templateReviewer.role ? [templateReviewer.role] : []);
+    
+    if (!userRoles.includes('template_reviewer') && !userRoles.includes('admin')) {
+      return res.status(403).json({ error: 'Selected user is not a template reviewer' });
+    }
+
+    // Check if company has selected templates
+    const selectedTemplates = await CompanyTemplate.findAll({
+      where: {
+        company_id: companyId,
+        is_selected: true
+      }
+    });
+
+    if (selectedTemplates.length === 0) {
+      return res.status(400).json({ error: 'No templates selected for this company. Please select templates before submitting for review.' });
+    }
+
+    // IMPORTANT: Don't overwrite assigned_to if company is already in data review
+    // Only update assigned_to if company is not currently in data review
+    const isInDataReview = company.status === 'in_review' && company.assigned_to !== null;
+    
+    const updateData = {};
+    
+    // If company is NOT in data review, we can safely update assigned_to for template review
+    // If company IS in data review, we keep the data reviewer assignment
+    if (!isInDataReview) {
+      // Company is not in data review, so we can assign to template reviewer
+      updateData.assigned_to = parseInt(template_reviewer_id);
+      // Set status to in_review for template review
+      if (company.status !== 'in_review') {
+        updateData.status = 'in_review';
+      }
+    }
+    // If company IS in data review, we don't change assigned_to or status
+    // The template reviewer will access it through template review page based on templates
+
+    if (Object.keys(updateData).length > 0) {
+      await company.update(updateData);
+    }
+
+    // Mark all selected templates as pending template review
+    await CompanyTemplate.update(
+      { 
+        review_status: 'pending',
+        // Store template reviewer ID in selected_by field if not already set
+        // This helps track which template reviewer should review these templates
+      },
+      {
+        where: {
+          company_id: companyId,
+          is_selected: true
+        }
+      }
+    );
+
+    // Fetch updated company with user details
+    const updatedCompany = await Company.findByPk(companyId, {
+      include: [
+        {
+          model: User,
+          as: 'assignedUser',
+          attributes: ['id', 'name', 'email']
+        }
+      ]
+    });
+
+    res.json({ 
+      message: isInDataReview 
+        ? 'Company submitted for template review. Data review is already in progress and will continue separately.'
+        : 'Company submitted for template review successfully',
+      company: updatedCompany,
+      isInDataReview: isInDataReview
+    });
+  } catch (error) {
+    console.error('Error submitting company for template review:', error);
+    res.status(500).json({ error: 'Failed to submit company for template review' });
+  }
+};
+
 module.exports = {
   getAllCompanies,
   getCompaniesByCase,
@@ -760,5 +864,6 @@ module.exports = {
   approveCompanyReview,
   rejectCompanyReview,
   duplicateCompany,
-  getReviewerStats
+  getReviewerStats,
+  submitForTemplateReview
 };
