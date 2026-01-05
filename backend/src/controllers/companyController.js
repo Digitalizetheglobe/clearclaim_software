@@ -1,15 +1,86 @@
 const { Company, CompanyValue, User, Case, CaseField, CompanyTemplate, Notification } = require('../models');
 const { sequelize } = require('../config/database');
+const { Op } = require('sequelize');
 
 // Get all companies (with optional filters)
 const getAllCompanies = async (req, res) => {
   try {
-    const { assigned_to, status, case_id } = req.query;
+    const { assigned_to, status, case_id, include_rejected_by } = req.query;
     
-    const whereClause = {};
-    if (assigned_to) whereClause.assigned_to = assigned_to;
-    if (status) whereClause.status = status;
-    if (case_id) whereClause.case_id = case_id;
+    let whereClause = {};
+    
+    // If include_rejected_by is true, find companies rejected by this reviewer via notifications
+    if (include_rejected_by === 'true' && assigned_to) {
+      const reviewerId = parseInt(assigned_to);
+      
+      try {
+        // Find all rejection notifications where this reviewer rejected the company
+        const rejectionNotifications = await Notification.findAll({
+          where: {
+            type: { [Op.in]: ['data_review_rejected', 'template_review_rejected'] }
+          },
+          attributes: ['company_id', 'metadata'],
+          raw: false // Get Sequelize instances to access metadata properly
+        });
+        
+        // Filter notifications where reviewer_id matches and extract company IDs
+        const rejectedCompanyIds = [];
+        rejectionNotifications.forEach(notif => {
+          try {
+            const metadata = notif.metadata;
+            if (metadata && typeof metadata === 'object' && metadata.reviewer_id === reviewerId && notif.company_id) {
+              rejectedCompanyIds.push(notif.company_id);
+            }
+          } catch (err) {
+            console.warn('Error processing notification metadata:', err);
+          }
+        });
+        
+        // Remove duplicates
+        const uniqueRejectedIds = [...new Set(rejectedCompanyIds)];
+        
+        // Build the where clause
+        const conditions = [];
+        
+        // Add assigned companies condition
+        const assignedCondition = { assigned_to: parseInt(assigned_to) };
+        if (status && status !== 'rejected') {
+          // If status filter is provided and it's not 'rejected', apply it to assigned companies
+          assignedCondition.status = status;
+        }
+        conditions.push(assignedCondition);
+        
+        // Add rejected companies condition if any exist
+        if (uniqueRejectedIds.length > 0) {
+          const rejectedCondition = { 
+            id: { [Op.in]: uniqueRejectedIds }, 
+            status: 'rejected' 
+          };
+          // Only include rejected companies if status filter is 'rejected' or no status filter
+          if (!status || status === 'rejected') {
+            conditions.push(rejectedCondition);
+          }
+        }
+        
+        // Combine conditions with OR
+        if (conditions.length > 1) {
+          whereClause[Op.or] = conditions;
+        } else if (conditions.length === 1) {
+          Object.assign(whereClause, conditions[0]);
+        }
+      } catch (notifError) {
+        console.error('Error fetching rejection notifications:', notifError);
+        // Fallback to just assigned companies if notification query fails
+        whereClause.assigned_to = parseInt(assigned_to);
+        if (status) whereClause.status = status;
+      }
+    } else {
+      if (assigned_to) whereClause.assigned_to = parseInt(assigned_to);
+      if (status) whereClause.status = status;
+    }
+    
+    // Apply case_id filter (applies to all conditions)
+    if (case_id) whereClause.case_id = parseInt(case_id);
     
     const companies = await Company.findAll({
       where: whereClause,
@@ -36,7 +107,11 @@ const getAllCompanies = async (req, res) => {
     res.json({ companies });
   } catch (error) {
     console.error('Error fetching companies:', error);
-    res.status(500).json({ error: 'Failed to fetch companies' });
+    console.error('Error stack:', error.stack);
+    res.status(500).json({ 
+      error: 'Failed to fetch companies',
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
   }
 };
 
@@ -571,9 +646,9 @@ const rejectCompanyReview = async (req, res) => {
       return res.status(403).json({ error: 'You can only reject companies assigned to you' });
     }
 
-    // Update company status back to in_progress and unassign from reviewer
+    // Update company status to rejected and unassign from reviewer
     await company.update({
-      status: 'in_progress',
+      status: 'rejected',
       assigned_to: company.created_by // Reassign to original creator
     });
 
@@ -599,6 +674,7 @@ const rejectCompanyReview = async (req, res) => {
         title: `${isDataReviewer ? 'Data Review' : 'Template Review'} Rejected`,
         message: `Your company "${company.company_name}" has been rejected by ${reviewer.name} and sent back for corrections. ${rejection_reason ? `Reason: ${rejection_reason}` : ''} ${companyWithCase.case ? `Case: ${companyWithCase.case.case_title}` : ''}`,
         metadata: {
+          reviewer_id: reviewerId, // Store reviewer ID to track who rejected
           reviewer_name: reviewer.name,
           reviewer_email: reviewer.email,
           review_type: reviewType,
