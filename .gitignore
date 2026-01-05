@@ -1,2 +1,5 @@
 # Frontend
 frontend/
+
+backend/.env
+.env
