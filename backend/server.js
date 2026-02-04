@@ -1,9 +1,11 @@
+const path = require('path');
 const express = require('express');
 const cors = require('cors');
 const dotenv = require('dotenv');
 const { sequelize } = require('./src/config/database');
 
-dotenv.config();
+// Load .env from backend directory (fixes PM2/prod when cwd is different)
+dotenv.config({ path: path.join(__dirname, '.env') });
 
 const app = express();
 
@@ -11,7 +13,7 @@ app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-require('./src/models');
+const models = require('./src/models');
 
 const userRoutes = require('./src/routes/users');
 const caseRoutes = require('./src/routes/cases');
@@ -72,6 +74,14 @@ async function startServer() {
         console.log('Database models synchronized');
       } catch (syncError) {
         console.error('Database sync failed:', syncError.message);
+      }
+    } else {
+      // Production: ensure inquiries table exists (safe, no alter)
+      try {
+        await models.Inquiry.sync();
+        console.log('Inquiries table ready');
+      } catch (syncError) {
+        console.error('Inquiries sync failed:', syncError.message);
       }
     }
     
