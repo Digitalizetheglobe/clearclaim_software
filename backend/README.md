@@ -41,6 +41,14 @@ A comprehensive backend API for the Clear Claim legal case management system bui
    DB_PORT=5432
    NODE_ENV=development
    JWT_SECRET=clearclaim_secret_key_2024
+
+   # Optional: Inquiry form email (Nodemailer)
+   SMTP_HOST=smtp.gmail.com
+   SMTP_PORT=587
+   SMTP_USER=your-email@gmail.com
+   SMTP_PASS=your-app-password
+   INQUIRY_EMAIL_TO=recipient@example.com
+   SMTP_FROM=your-email@gmail.com
    ```
 
 4. **Set up PostgreSQL database**

@@ -21,6 +21,7 @@ const claimantRoutes = require('./src/routes/claimants');
 const companyTemplateRoutes = require('./src/routes/companyTemplates');
 const caseTemplateRoutes = require('./src/routes/caseTemplates');
 const notificationRoutes = require('./src/routes/notifications');
+const inquiryRoutes = require('./src/routes/inquiries');
 
 app.use('/api/users', userRoutes);
 app.use('/api/cases', caseRoutes);
@@ -30,7 +31,7 @@ app.use('/api/claimants', claimantRoutes);
 app.use('/api/company-templates', companyTemplateRoutes);
 app.use('/api/case-templates', caseTemplateRoutes);
 app.use('/api/notifications', notificationRoutes);
-
+app.use('/api/inquiries', inquiryRoutes);
 
 
 
@@ -51,7 +52,7 @@ app.use((err, req, res, next) => {
     message: process.env.NODE_ENV === 'development' ? err.message : 'Internal server error'
   });
 });
-
+// new change update 
 // 404 handler
 app.use('*', (req, res) => {
   res.status(404).json({ error: 'Welcome to ClearClaim Backend APIs v 1.0.0' });
