@@ -231,7 +231,9 @@ const getCompanyTemplates = async (req, res) => {
       // Scan templates directory
       const templatesDir = path.join(__dirname, '../../templates');
       const templateFiles = await fs.readdir(templatesDir);
-      const docxFiles = templateFiles.filter(file => file.endsWith('.docx') && !file.startsWith('~$'));
+      const docxFiles = templateFiles.filter(file =>
+        file.endsWith('.docx') && !file.startsWith('~$') && !file.includes('_backup')
+      );
       
       console.log(`Found ${docxFiles.length} template files in directory`);
       
@@ -2413,7 +2415,8 @@ const downloadPopulatedTemplate = async (req, res) => {
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     res.setHeader('Content-Length', populatedBuffer.length);
-    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
+    res.setHeader('Pragma', 'no-cache');
     
     // Send the populated document
     res.end(populatedBuffer);

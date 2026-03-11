@@ -7,7 +7,7 @@ const { sequelize } = require('../config/database');
 
 const router = express.Router();  
 
-// User Registration
+// User Registration 
 router.post('/register', async (req, res) => {
   try {
     const { name, email, password, role } = req.body;
