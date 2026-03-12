@@ -232,7 +232,10 @@ const getCompanyTemplates = async (req, res) => {
       const templatesDir = path.join(__dirname, '../../templates');
       const templateFiles = await fs.readdir(templatesDir);
       const docxFiles = templateFiles.filter(file =>
-        file.endsWith('.docx') && !file.startsWith('~$') && !file.includes('_backup')
+        file.endsWith('.docx') &&
+        !file.startsWith('~$') &&
+        !file.toLowerCase().includes('backup') &&
+        !file.includes('--')
       );
       
       console.log(`Found ${docxFiles.length} template files in directory`);
