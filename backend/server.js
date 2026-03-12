@@ -24,6 +24,7 @@ const companyTemplateRoutes = require('./src/routes/companyTemplates');
 const caseTemplateRoutes = require('./src/routes/caseTemplates');
 const notificationRoutes = require('./src/routes/notifications');
 const inquiryRoutes = require('./src/routes/inquiries');
+const shareRecoveryRoutes = require('./src/routes/shareRecovery');
 
 app.use('/api/users', userRoutes);
 app.use('/api/cases', caseRoutes);
@@ -34,6 +35,7 @@ app.use('/api/company-templates', companyTemplateRoutes);
 app.use('/api/case-templates', caseTemplateRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/inquiries', inquiryRoutes);
+app.use('/api/share-recovery', shareRecoveryRoutes);
 
 
 
@@ -79,9 +81,10 @@ async function startServer() {
       // Production: ensure inquiries table exists (safe, no alter)
       try {
         await models.Inquiry.sync();
-        console.log('Inquiries table ready');
+        await models.ShareRecovery.sync();
+        console.log('Inquiries and ShareRecovery tables ready');
       } catch (syncError) {
-        console.error('Inquiries sync failed:', syncError.message);
+        console.error('Tables sync failed:', syncError.message);
       }
     }
     
