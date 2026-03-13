@@ -13,6 +13,7 @@ const CompanyTemplate = require('./CompanyTemplate')(sequelize);
 const Notification = require('./Notification')(sequelize);
 const Inquiry = require('./Inquiry')(sequelize);
 const ShareRecovery = require('./ShareRecovery')(sequelize);
+const Iepf = require('./Iepf')(sequelize);
 
 // User - Case associations
 User.hasMany(Case, { 
@@ -210,5 +211,6 @@ module.exports = {
   CompanyTemplate,
   Notification,
   Inquiry,
-  ShareRecovery
+  ShareRecovery,
+  Iepf
 };

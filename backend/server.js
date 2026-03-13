@@ -1,11 +1,12 @@
 const path = require('path');
+const dotenv = require('dotenv');
+
+// Load .env first so database and other configs see env vars (fixes running from project root or PM2)
+dotenv.config({ path: path.join(__dirname, '.env') });
+
 const express = require('express');
 const cors = require('cors');
-const dotenv = require('dotenv');
 const { sequelize } = require('./src/config/database');
-
-// Load .env from backend directory (fixes PM2/prod when cwd is different)
-dotenv.config({ path: path.join(__dirname, '.env') });
 
 const app = express();
 
@@ -25,6 +26,7 @@ const caseTemplateRoutes = require('./src/routes/caseTemplates');
 const notificationRoutes = require('./src/routes/notifications');
 const inquiryRoutes = require('./src/routes/inquiries');
 const shareRecoveryRoutes = require('./src/routes/shareRecovery');
+const iepfRoutes = require('./src/routes/iepf');
 
 app.use('/api/users', userRoutes);
 app.use('/api/cases', caseRoutes);
@@ -36,6 +38,7 @@ app.use('/api/case-templates', caseTemplateRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/inquiries', inquiryRoutes);
 app.use('/api/share-recovery', shareRecoveryRoutes);
+app.use('/api/iepf', iepfRoutes);
 
 
 
@@ -82,7 +85,8 @@ async function startServer() {
       try {
         await models.Inquiry.sync();
         await models.ShareRecovery.sync();
-        console.log('Inquiries and ShareRecovery tables ready');
+        await models.Iepf.sync();
+        console.log('Inquiries, ShareRecovery and IEPF tables ready');
       } catch (syncError) {
         console.error('Tables sync failed:', syncError.message);
       }
