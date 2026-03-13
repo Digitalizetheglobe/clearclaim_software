@@ -27,6 +27,7 @@ const notificationRoutes = require('./src/routes/notifications');
 const inquiryRoutes = require('./src/routes/inquiries');
 const shareRecoveryRoutes = require('./src/routes/shareRecovery');
 const iepfRoutes = require('./src/routes/iepf');
+const contactRoutes = require('./src/routes/contacts');
 
 app.use('/api/users', userRoutes);
 app.use('/api/cases', caseRoutes);
@@ -39,6 +40,7 @@ app.use('/api/notifications', notificationRoutes);
 app.use('/api/inquiries', inquiryRoutes);
 app.use('/api/share-recovery', shareRecoveryRoutes);
 app.use('/api/iepf', iepfRoutes);
+app.use('/api/contacts', contactRoutes);
 
 
 
@@ -86,7 +88,8 @@ async function startServer() {
         await models.Inquiry.sync();
         await models.ShareRecovery.sync();
         await models.Iepf.sync();
-        console.log('Inquiries, ShareRecovery and IEPF tables ready');
+        await models.Contact.sync();
+        console.log('Inquiries, ShareRecovery, IEPF and Contact tables ready');
       } catch (syncError) {
         console.error('Tables sync failed:', syncError.message);
       }
