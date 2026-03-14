@@ -25,10 +25,9 @@ async function sendShareRecoveryEmail(record) {
   const html = `
     <h2>Recovery of Share – New Form Submission</h2>
     <p><strong>Name:</strong> ${record.name}</p>
+    <p><strong>Mobile number:</strong> ${record.mobileNumber}</p>
     <p><strong>Email:</strong> ${record.email}</p>
-    <p><strong>Subject:</strong> ${record.subject}</p>
-    <p><strong>Message:</strong></p>
-    <p>${(record.message || '').replace(/\n/g, '<br>')}</p>
+    <p><strong>City:</strong> ${record.city}</p>
     <hr>
     <p><em>Submitted at ${record.createdAt ? new Date(record.createdAt).toLocaleString() : ''}</em></p>
   `;
@@ -37,7 +36,7 @@ async function sendShareRecoveryEmail(record) {
     await transporter.sendMail({
       from: process.env.SMTP_FROM || process.env.SMTP_USER,
       to,
-      subject: `Recovery of Share: ${record.subject} – ${record.name}`,
+      subject: `Recovery of Share form – ${record.name}`,
       html
     });
     return { sent: true };
@@ -51,7 +50,7 @@ exports.list = async (req, res) => {
   try {
     const list = await ShareRecovery.findAll({
       order: [['createdAt', 'DESC']],
-      attributes: ['id', 'name', 'email', 'subject', 'message', 'createdAt']
+      attributes: ['id', 'name', 'mobileNumber', 'email', 'city', 'createdAt']
     });
     res.json({ shareRecoveries: list });
   } catch (error) {
@@ -62,20 +61,20 @@ exports.list = async (req, res) => {
 
 exports.create = async (req, res) => {
   try {
-    const { name, email, subject, message } = req.body;
+    const { name, mobileNumber, email, city } = req.body;
 
-    if (!name || !email || !subject || !message) {
+    if (!name || !mobileNumber || !email || !city) {
       return res.status(400).json({
         error: 'Missing required fields',
-        required: ['name', 'email', 'subject', 'message']
+        required: ['name', 'mobileNumber', 'email', 'city']
       });
     }
 
     const record = await ShareRecovery.create({
       name,
+      mobileNumber,
       email,
-      subject,
-      message
+      city
     });
 
     const emailResult = await sendShareRecoveryEmail(record);
