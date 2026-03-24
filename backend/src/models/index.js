@@ -10,6 +10,7 @@ const Company = require('./Company')(sequelize);
 const CompanyValue = require('./CompanyValue')(sequelize);
 const Claimant = require('./Claimant')(sequelize);
 const CompanyTemplate = require('./CompanyTemplate')(sequelize);
+const CompanyStatus = require('./CompanyStatus')(sequelize);
 const Notification = require('./Notification')(sequelize);
 const Inquiry = require('./Inquiry')(sequelize);
 const ShareRecovery = require('./ShareRecovery')(sequelize);
@@ -91,6 +92,16 @@ Company.belongsTo(User, {
 Company.belongsTo(User, { 
   foreignKey: 'assigned_to', 
   as: 'assignedUser' 
+});
+
+// User - CompanyStatus associations
+User.hasMany(CompanyStatus, {
+  foreignKey: 'created_by',
+  as: 'createdCompanyStatuses'
+});
+CompanyStatus.belongsTo(User, {
+  foreignKey: 'created_by',
+  as: 'createdByUser'
 });
 
 // Company - CompanyValue associations
@@ -210,6 +221,7 @@ module.exports = {
   CompanyValue,
   Claimant,
   CompanyTemplate,
+  CompanyStatus,
   Notification,
   Inquiry,
   ShareRecovery,

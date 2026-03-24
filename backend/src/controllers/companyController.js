@@ -1,6 +1,23 @@
-const { Company, CompanyValue, User, Case, CaseField, CompanyTemplate, Notification } = require('../models');
+const { Company, CompanyValue, User, Case, CaseField, CompanyTemplate, Notification, CompanyStatus } = require('../models');
 const { sequelize } = require('../config/database');
 const { Op } = require('sequelize');
+
+const DEFAULT_COMPANY_STATUSES = [
+  { name: 'Pending', value: 'pending', color: '#f59e0b' },
+  { name: 'In Progress', value: 'in_progress', color: '#2563eb' },
+  { name: 'In Review', value: 'in_review', color: '#7c3aed' },
+  { name: 'Completed', value: 'completed', color: '#16a34a' },
+  { name: 'Rejected', value: 'rejected', color: '#dc2626' }
+];
+
+const ensureCompanyStatusDefaults = async () => {
+  for (const status of DEFAULT_COMPANY_STATUSES) {
+    await CompanyStatus.findOrCreate({
+      where: { value: status.value },
+      defaults: status
+    });
+  }
+};
 
 // Get all companies (with optional filters)
 const getAllCompanies = async (req, res) => {
@@ -301,7 +318,19 @@ const updateCompanyStatus = async (req, res) => {
 
     const updateData = {};
     if (status !== undefined) {
-      updateData.status = status;
+      await ensureCompanyStatusDefaults();
+      const normalizedStatus = String(status).trim().toLowerCase();
+      const validStatus = await CompanyStatus.findOne({
+        where: { value: normalizedStatus, is_active: true }
+      });
+
+      if (!validStatus) {
+        return res.status(400).json({
+          error: 'Invalid company status. Please select an active status from admin configuration.'
+        });
+      }
+
+      updateData.status = normalizedStatus;
     }
     if (assigned_to !== undefined) {
       updateData.assigned_to = assigned_to || null;
