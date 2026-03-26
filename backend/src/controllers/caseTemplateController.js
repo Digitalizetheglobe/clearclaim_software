@@ -10,28 +10,43 @@ const getAllTemplates = async (req, res) => {
     // Scan templates directory
     const templatesDir = path.join(__dirname, '../../templates');
     const templateFiles = await fs.readdir(templatesDir);
-    const docxFiles = templateFiles.filter(file => file.endsWith('.docx'));
+    // Keep this consistent with company template scanning logic:
+    // - Skip Word temp files (~$...)
+    // - Skip backups
+    // - Skip known "invalid" double-hyphen variants
+    const docxFiles = templateFiles.filter(file =>
+      file.endsWith('.docx') &&
+      !file.startsWith('~$') &&
+      !file.toLowerCase().includes('backup') &&
+      !file.includes('--')
+    );
 
     const templates = docxFiles.map(file => {
-      const cleanName = file.replace('_Template.docx', '').replace(/_/g, ' ');
+      const cleanName = file
+        .replace('_Template.docx', '')
+        .replace('.docx', '')
+        .replace(/_/g, ' ')
+        .trim();
+
       let category = 'general';
       
       // Categorize templates based on filename
-      if (file.includes('Annexure-D')) {
+      const lower = file.toLowerCase();
+      if (lower.includes('annexure-d')) {
         category = 'individual_affidavit';
-      } else if (file.includes('Annexure-E')) {
+      } else if (lower.includes('annexure-e')) {
         category = 'indemnity_bond';
-      } else if (file.includes('Annexure-F')) {
+      } else if (lower.includes('annexure-f')) {
         category = 'noc';
-      } else if (file.includes('Form-A')) {
+      } else if (lower.includes('form-a') || lower.includes('form a')) {
         category = 'affidavit';
-      } else if (file.includes('Form-B')) {
+      } else if (lower.includes('form-b') || lower.includes('form b')) {
         category = 'indemnity';
-      } else if (file.includes('ISR-')) {
+      } else if (lower.includes('isr-')) {
         category = 'isr';
-      } else if (file.includes('Name Mismatch')) {
+      } else if (lower.includes('name mismatch')) {
         category = 'name_mismatch';
-      } else if (file.includes('SH-13')) {
+      } else if (lower.includes('sh-13')) {
         category = 'sh13';
       }
 
