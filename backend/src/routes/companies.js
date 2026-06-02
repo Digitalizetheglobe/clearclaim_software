@@ -17,7 +17,10 @@ const {
   rejectCompanyReview,
   duplicateCompany,
   getReviewerStats,
-  submitForTemplateReview
+  submitForTemplateReview,
+  assignForDataReview,
+  getCompanyNotes,
+  addCompanyNote
 } = require('../controllers/companyController');
 
 const { deleteCase } = require('../controllers/caseController');
@@ -66,6 +69,9 @@ router.get('/reviewer/stats', getReviewerStats);
 // Update reviewer comment for a field
 router.patch('/:companyId/reviewer-comment', updateReviewerComment);
 
+// Assign company for data review (round-robin)
+router.post('/:companyId/assign-data-review', assignForDataReview);
+
 // Approve company after review
 router.post('/:companyId/approve-review', approveCompanyReview);
 
@@ -77,5 +83,9 @@ router.post('/:companyId/submit-template-review', submitForTemplateReview);
 
 // Duplicate company with all its values
 router.post('/:companyId/duplicate', duplicateCompany);
+
+// Company notes
+router.get('/:companyId/notes', getCompanyNotes);
+router.post('/:companyId/notes', addCompanyNote);
 
 module.exports = router;

@@ -29,6 +29,7 @@ const shareRecoveryRoutes = require('./src/routes/shareRecovery');
 const iepfRoutes = require('./src/routes/iepf');
 const contactRoutes = require('./src/routes/contacts');
 const companyStatusRoutes = require('./src/routes/companyStatuses');
+const dashboardRoutes = require('./src/routes/dashboard');
 
 app.use('/api/users', userRoutes);
 app.use('/api/cases', caseRoutes);
@@ -43,6 +44,7 @@ app.use('/api/share-recovery', shareRecoveryRoutes);
 app.use('/api/iepf', iepfRoutes);
 app.use('/api/contacts', contactRoutes);
 app.use('/api/company-statuses', companyStatusRoutes);
+app.use('/api/dashboard', dashboardRoutes);
 
 
 

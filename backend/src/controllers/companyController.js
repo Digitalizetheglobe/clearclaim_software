@@ -1,4 +1,4 @@
-const { Company, CompanyValue, User, Case, CaseField, CompanyTemplate, Notification, CompanyStatus } = require('../models');
+const { Company, CompanyValue, CompanyNote, User, Case, CaseField, CompanyTemplate, Notification, CompanyStatus } = require('../models');
 const { sequelize } = require('../config/database');
 const { Op } = require('sequelize');
 
@@ -17,6 +17,82 @@ const ensureCompanyStatusDefaults = async () => {
       defaults: status
     });
   }
+};
+
+const normalizeCompanyStatus = (status) =>
+  String(status || '').toLowerCase().replace(/[\s-]+/g, '_').trim();
+
+const getUserRoles = (user) => {
+  if (!user?.role) return [];
+  const roles = Array.isArray(user.role) ? user.role : [user.role];
+  return roles.map((r) => String(r).toLowerCase().trim());
+};
+
+const canEditCompanyInReview = (user, company) => {
+  const roles = getUserRoles(user);
+  const isReviewer = roles.includes('data_reviewer') || roles.includes('template_reviewer');
+  const isAssignedReviewer =
+    company.assigned_to != null && Number(company.assigned_to) === Number(user.id);
+  return isReviewer && isAssignedReviewer;
+};
+
+const isDataOrTemplateReviewerUser = (user) => {
+  const roles = getUserRoles(user);
+  return roles.includes('data_reviewer') || roles.includes('template_reviewer');
+};
+
+const getCompanyOwnerIdsForReview = (company) => {
+  const ids = new Set();
+  [company.assigned_to, company.created_by].forEach((id) => {
+    if (id != null && id !== '') ids.add(Number(id));
+  });
+  return ids;
+};
+
+const fetchEligibleDataReviewers = async (company) => {
+  const allUsers = await User.findAll({
+    attributes: ['id', 'name', 'email', 'role']
+  });
+  const ownerIds = getCompanyOwnerIdsForReview(company);
+  return allUsers
+    .filter((user) => isDataOrTemplateReviewerUser(user) && !ownerIds.has(Number(user.id)))
+    .sort((a, b) => Number(a.id) - Number(b.id));
+};
+
+const pickRoundRobinReviewerId = async (eligibleReviewers) => {
+  if (!eligibleReviewers.length) return null;
+  const eligibleIds = eligibleReviewers.map((r) => Number(r.id));
+  if (eligibleIds.length === 1) return eligibleIds[0];
+
+  const lastAssignedCompany = await Company.findOne({
+    where: {
+      status: 'in_review',
+      assigned_to: { [Op.in]: eligibleIds }
+    },
+    order: [['updated_at', 'DESC']],
+    attributes: ['assigned_to']
+  });
+
+  if (!lastAssignedCompany?.assigned_to) {
+    return eligibleIds[0];
+  }
+
+  const lastReviewerId = Number(lastAssignedCompany.assigned_to);
+  const lastIndex = eligibleIds.indexOf(lastReviewerId);
+  if (lastIndex === -1) return eligibleIds[0];
+  return eligibleIds[(lastIndex + 1) % eligibleIds.length];
+};
+
+const companyHasWorkData = async (companyId) => {
+  const values = await CompanyValue.findAll({
+    where: { company_id: companyId },
+    attributes: ['field_value']
+  });
+  return values.some((row) => {
+    const value = row.field_value;
+    if (value === null || value === undefined) return false;
+    return String(value).trim() !== '';
+  });
 };
 
 // Get all companies (with optional filters)
@@ -286,6 +362,15 @@ const updateCompanyValues = async (req, res) => {
       return res.status(404).json({ error: 'Company not found' });
     }
 
+    if (
+      normalizeCompanyStatus(company.status) === 'in_review' &&
+      !canEditCompanyInReview(req.user, company)
+    ) {
+      return res.status(403).json({
+        error: 'Company is locked while under review. Wait for the reviewer to update the status.'
+      });
+    }
+
     // Update or create each field value
     for (const fieldValue of field_values) {
       const { field_key, field_value } = fieldValue;
@@ -314,6 +399,18 @@ const updateCompanyStatus = async (req, res) => {
     const company = await Company.findByPk(companyId);
     if (!company) {
       return res.status(404).json({ error: 'Company not found' });
+    }
+
+    const roles = getUserRoles(req.user);
+    const isEmployeeOrSales = roles.includes('employee') || roles.includes('sales');
+    if (
+      normalizeCompanyStatus(company.status) === 'in_review' &&
+      isEmployeeOrSales &&
+      !canEditCompanyInReview(req.user, company)
+    ) {
+      return res.status(403).json({
+        error: 'Company status cannot be changed while it is under review.'
+      });
     }
 
     const updateData = {};
@@ -844,6 +941,102 @@ const duplicateCompany = async (req, res) => {
   }
 };
 
+// Assign company for data review using round-robin among eligible reviewers
+const assignForDataReview = async (req, res) => {
+  try {
+    const { companyId } = req.params;
+
+    const company = await Company.findByPk(companyId, {
+      include: [
+        {
+          model: Case,
+          as: 'case',
+          attributes: ['id', 'case_id', 'case_title', 'client_name']
+        }
+      ]
+    });
+
+    if (!company) {
+      return res.status(404).json({ error: 'Company not found' });
+    }
+
+    if (normalizeCompanyStatus(company.status) === 'in_review') {
+      return res.status(400).json({ error: 'Company is already under data review.' });
+    }
+
+    const hasData = await companyHasWorkData(companyId);
+    if (!hasData) {
+      return res.status(400).json({
+        error:
+          'Company data is required before assigning for review. Fill fields in Company Work View first.'
+      });
+    }
+
+    const eligibleReviewers = await fetchEligibleDataReviewers(company);
+    if (!eligibleReviewers.length) {
+      return res.status(400).json({
+        error:
+          'No eligible data reviewers available. Add a data or template reviewer, or ensure the assigned employee is not the only reviewer.'
+      });
+    }
+
+    const reviewerId = await pickRoundRobinReviewerId(eligibleReviewers);
+    const reviewer = eligibleReviewers.find((r) => Number(r.id) === Number(reviewerId));
+
+    await ensureCompanyStatusDefaults();
+
+    await company.update({
+      status: 'in_review',
+      assigned_to: reviewerId
+    });
+
+    try {
+      await Notification.create({
+        user_id: reviewerId,
+        company_id: Number(companyId),
+        case_id: company.case_id,
+        type: 'data_review_assigned',
+        title: 'New Data Review Assignment',
+        message: `Company "${company.company_name}" has been assigned to you for data review.${
+          company.case ? ` Case: ${company.case.case_title}` : ''
+        }`,
+        metadata: {
+          assignment_method: 'round_robin',
+          company_name: company.company_name,
+          assigned_by: req.user?.id ?? null,
+          assigned_by_name: req.user?.name ?? null
+        }
+      });
+    } catch (notificationError) {
+      console.error('Failed to create reviewer assignment notification:', notificationError);
+    }
+
+    const updatedCompany = await Company.findByPk(companyId, {
+      include: [
+        {
+          model: User,
+          as: 'assignedUser',
+          attributes: ['id', 'name', 'email']
+        }
+      ]
+    });
+
+    res.json({
+      message: 'Company assigned for data review successfully.',
+      company: updatedCompany,
+      assigned_reviewer: {
+        id: reviewer.id,
+        name: reviewer.name,
+        email: reviewer.email
+      },
+      assignment_method: 'round_robin'
+    });
+  } catch (error) {
+    console.error('Error assigning company for data review:', error);
+    res.status(500).json({ error: 'Failed to assign company for data review' });
+  }
+};
+
 // Get reviewer tracking statistics
 const getReviewerStats = async (req, res) => {
   try {
@@ -1019,6 +1212,75 @@ const submitForTemplateReview = async (req, res) => {
   }
 };
 
+const getCompanyNotes = async (req, res) => {
+  try {
+    const { companyId } = req.params;
+
+    const company = await Company.findByPk(companyId);
+    if (!company) {
+      return res.status(404).json({ error: 'Company not found' });
+    }
+
+    const notes = await CompanyNote.findAll({
+      where: { company_id: companyId },
+      include: [
+        {
+          model: User,
+          as: 'user',
+          attributes: ['id', 'name', 'email']
+        }
+      ],
+      order: [['createdAt', 'DESC']]
+    });
+
+    res.json({ notes });
+  } catch (error) {
+    console.error('Error fetching company notes:', error);
+    res.status(500).json({ error: 'Failed to fetch company notes' });
+  }
+};
+
+const addCompanyNote = async (req, res) => {
+  try {
+    const { companyId } = req.params;
+    const { note } = req.body;
+    const userId = req.user.id;
+
+    if (!note || !String(note).trim()) {
+      return res.status(400).json({ error: 'Note is required' });
+    }
+
+    const company = await Company.findByPk(companyId);
+    if (!company) {
+      return res.status(404).json({ error: 'Company not found' });
+    }
+
+    const created = await CompanyNote.create({
+      company_id: companyId,
+      user_id: userId,
+      note: String(note).trim()
+    });
+
+    const createdWithUser = await CompanyNote.findByPk(created.id, {
+      include: [
+        {
+          model: User,
+          as: 'user',
+          attributes: ['id', 'name', 'email']
+        }
+      ]
+    });
+
+    res.status(201).json({
+      message: 'Note added successfully',
+      note: createdWithUser
+    });
+  } catch (error) {
+    console.error('Error adding company note:', error);
+    res.status(500).json({ error: 'Failed to add company note' });
+  }
+};
+
 module.exports = {
   getAllCompanies,
   getCompaniesByCase,
@@ -1035,5 +1297,8 @@ module.exports = {
   rejectCompanyReview,
   duplicateCompany,
   getReviewerStats,
-  submitForTemplateReview
+  submitForTemplateReview,
+  assignForDataReview,
+  getCompanyNotes,
+  addCompanyNote
 };

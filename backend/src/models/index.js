@@ -8,6 +8,7 @@ const CaseField = require('./CaseField')(sequelize);
 const CaseValue = require('./CaseValue')(sequelize);
 const Company = require('./Company')(sequelize);
 const CompanyValue = require('./CompanyValue')(sequelize);
+const CompanyNote = require('./CompanyNote')(sequelize);
 const Claimant = require('./Claimant')(sequelize);
 const CompanyTemplate = require('./CompanyTemplate')(sequelize);
 const CompanyStatus = require('./CompanyStatus')(sequelize);
@@ -113,6 +114,16 @@ CompanyValue.belongsTo(Company, {
   foreignKey: 'company_id' 
 });
 
+// Company - CompanyNote associations
+Company.hasMany(CompanyNote, {
+  foreignKey: 'company_id',
+  as: 'companyNotes'
+});
+CompanyNote.belongsTo(Company, {
+  foreignKey: 'company_id',
+  as: 'company'
+});
+
 // User - CompanyValue associations
 User.hasMany(CompanyValue, { 
   foreignKey: 'last_updated_by', 
@@ -121,6 +132,16 @@ User.hasMany(CompanyValue, {
 CompanyValue.belongsTo(User, { 
   foreignKey: 'last_updated_by', 
   as: 'lastUpdatedByUser' 
+});
+
+// User - CompanyNote associations
+User.hasMany(CompanyNote, {
+  foreignKey: 'user_id',
+  as: 'companyNotes'
+});
+CompanyNote.belongsTo(User, {
+  foreignKey: 'user_id',
+  as: 'user'
 });
 
 // CaseField - CompanyValue associations (for reference)
@@ -219,6 +240,7 @@ module.exports = {
   CaseValue,
   Company,
   CompanyValue,
+  CompanyNote,
   Claimant,
   CompanyTemplate,
   CompanyStatus,
