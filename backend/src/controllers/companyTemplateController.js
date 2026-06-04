@@ -2618,6 +2618,12 @@ const updateTemplateComment = async (req, res) => {
     if (admin_comment !== undefined) updateData.admin_comment = admin_comment;
     if (admin_remark !== undefined) updateData.admin_remark = admin_remark;
     if (review_status !== undefined) updateData.review_status = review_status;
+
+    // New improvement cycle: clear prior employee response so they can reply again
+    if (review_status === 'need_to_improve') {
+      updateData.employee_response = null;
+      updateData.employee_response_at = null;
+    }
     
     const updatedTemplate = await models.CompanyTemplate.update(
       updateData,
@@ -2671,8 +2677,13 @@ const updateEmployeeResponse = async (req, res) => {
       });
     }
     
-    // Prevent editing existing responses - employees can only add a response once
-    if (existingTemplate.employee_response && existingTemplate.employee_response.trim() !== '') {
+    const hasExistingResponse =
+      existingTemplate.employee_response &&
+      existingTemplate.employee_response.trim() !== '';
+    const canRespondAgain = existingTemplate.review_status === 'need_to_improve';
+
+    // Block edits unless admin requested improvements (new response cycle)
+    if (hasExistingResponse && !canRespondAgain) {
       return res.status(403).json({
         success: false,
         error: 'Cannot edit existing response. Your response has already been saved and cannot be modified. Please contact the admin if you need to add more information.'
@@ -2681,17 +2692,18 @@ const updateEmployeeResponse = async (req, res) => {
     
     console.log(`💬 Employee ${req.user?.id} adding response for template ${templateId}...`);
     
-    // Only allow adding new response if one doesn't exist
+    const whereClause = { id: templateId };
+    if (!canRespondAgain) {
+      whereClause.employee_response = null;
+    }
+
     const updatedTemplate = await models.CompanyTemplate.update(
       { 
         employee_response,
         employee_response_at: new Date()
       },
       { 
-        where: { 
-          id: templateId,
-          employee_response: null // Only update if response is null
-        },
+        where: whereClause,
         returning: true
       }
     );

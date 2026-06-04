@@ -179,6 +179,19 @@ const createCase = async (req, res) => {
   }
 };
 
+const ALLOWED_CASE_STATUSES = ['pending', 'assigned', 'in_review', 'completed'];
+
+const normalizeAssignedTo = (assigned_to) => {
+  if (assigned_to === undefined) return undefined;
+  if (assigned_to === null || assigned_to === '') return null;
+  if (typeof assigned_to === 'object' && assigned_to !== null) {
+    const id = assigned_to.id;
+    return id == null ? null : parseInt(id, 10);
+  }
+  const parsed = parseInt(assigned_to, 10);
+  return Number.isNaN(parsed) ? null : parsed;
+};
+
 // Update case
 const updateCase = async (req, res) => {
   try {
@@ -200,17 +213,31 @@ const updateCase = async (req, res) => {
       return res.status(404).json({ error: 'Case not found.' });
     }
 
-    // Update case
-    await caseData.update({
-      client_name,
-      client_mobile,
-      client_email,
-      case_title,
-      deal_id,
-      cp_name,
-      status,
-      assigned_to
-    });
+    if (status !== undefined && !ALLOWED_CASE_STATUSES.includes(status)) {
+      return res.status(400).json({
+        error: `Invalid case status "${status}". Allowed values: ${ALLOWED_CASE_STATUSES.join(', ')}.`
+      });
+    }
+
+    const updateFields = {};
+    if (client_name !== undefined) updateFields.client_name = client_name;
+    if (client_mobile !== undefined) updateFields.client_mobile = client_mobile;
+    if (client_email !== undefined) updateFields.client_email = client_email;
+    if (case_title !== undefined) updateFields.case_title = case_title;
+    if (deal_id !== undefined) updateFields.deal_id = deal_id;
+    if (cp_name !== undefined) updateFields.cp_name = cp_name;
+    if (status !== undefined) updateFields.status = status;
+
+    const normalizedAssignedTo = normalizeAssignedTo(assigned_to);
+    if (normalizedAssignedTo !== undefined) {
+      updateFields.assigned_to = normalizedAssignedTo;
+    }
+
+    if (Object.keys(updateFields).length === 0) {
+      return res.status(400).json({ error: 'No valid fields provided to update.' });
+    }
+
+    await caseData.update(updateFields);
 
     // Fetch updated case with user details
     const updatedCase = await Case.findByPk(caseId, {
