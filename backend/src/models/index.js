@@ -86,6 +86,10 @@ User.hasMany(Company, {
   foreignKey: 'assigned_to', 
   as: 'assignedCompanies' 
 });
+User.hasMany(Company, { 
+  foreignKey: 'template_reviewer_id', 
+  as: 'templateReviewCompanies' 
+});
 Company.belongsTo(User, { 
   foreignKey: 'created_by', 
   as: 'createdByUser' 
@@ -93,6 +97,10 @@ Company.belongsTo(User, {
 Company.belongsTo(User, { 
   foreignKey: 'assigned_to', 
   as: 'assignedUser' 
+});
+Company.belongsTo(User, { 
+  foreignKey: 'template_reviewer_id', 
+  as: 'templateReviewer' 
 });
 
 // User - CompanyStatus associations

@@ -98,19 +98,27 @@ const companyHasWorkData = async (companyId) => {
 // Get all companies (with optional filters)
 const getAllCompanies = async (req, res) => {
   try {
-    const { assigned_to, status, case_id, include_rejected_by } = req.query;
+    const { assigned_to, template_reviewer_id, status, case_id, include_rejected_by, rejection_type } = req.query;
     
     let whereClause = {};
+    const reviewerIdForRejections = parseInt(assigned_to || template_reviewer_id, 10);
     
     // If include_rejected_by is true, find companies rejected by this reviewer via notifications
-    if (include_rejected_by === 'true' && assigned_to) {
-      const reviewerId = parseInt(assigned_to);
+    if (include_rejected_by === 'true' && reviewerIdForRejections) {
+      const reviewerId = reviewerIdForRejections;
       
       try {
+        const rejectionTypes =
+          rejection_type === 'template'
+            ? ['template_review_rejected']
+            : rejection_type === 'data'
+            ? ['data_review_rejected']
+            : ['data_review_rejected', 'template_review_rejected'];
+
         // Find all rejection notifications where this reviewer rejected the company
         const rejectionNotifications = await Notification.findAll({
           where: {
-            type: { [Op.in]: ['data_review_rejected', 'template_review_rejected'] }
+            type: { [Op.in]: rejectionTypes }
           },
           attributes: ['company_id', 'metadata'],
           raw: false // Get Sequelize instances to access metadata properly
@@ -121,7 +129,12 @@ const getAllCompanies = async (req, res) => {
         rejectionNotifications.forEach(notif => {
           try {
             const metadata = notif.metadata;
-            if (metadata && typeof metadata === 'object' && metadata.reviewer_id === reviewerId && notif.company_id) {
+            if (
+              metadata &&
+              typeof metadata === 'object' &&
+              Number(metadata.reviewer_id) === reviewerId &&
+              notif.company_id
+            ) {
               rejectedCompanyIds.push(notif.company_id);
             }
           } catch (err) {
@@ -136,12 +149,18 @@ const getAllCompanies = async (req, res) => {
         const conditions = [];
         
         // Add assigned companies condition
-        const assignedCondition = { assigned_to: parseInt(assigned_to) };
-        if (status && status !== 'rejected') {
-          // If status filter is provided and it's not 'rejected', apply it to assigned companies
-          assignedCondition.status = status;
+        if (assigned_to) {
+          const assignedCondition = { assigned_to: parseInt(assigned_to, 10) };
+          if (status && status !== 'rejected') {
+            assignedCondition.status = status;
+          }
+          conditions.push(assignedCondition);
         }
-        conditions.push(assignedCondition);
+
+        // Include companies where this user is the template reviewer
+        if (template_reviewer_id) {
+          conditions.push({ template_reviewer_id: parseInt(template_reviewer_id, 10) });
+        }
         
         // Add rejected companies condition if any exist
         if (uniqueRejectedIds.length > 0) {
@@ -149,7 +168,6 @@ const getAllCompanies = async (req, res) => {
             id: { [Op.in]: uniqueRejectedIds }, 
             status: 'rejected' 
           };
-          // Only include rejected companies if status filter is 'rejected' or no status filter
           if (!status || status === 'rejected') {
             conditions.push(rejectedCondition);
           }
@@ -163,12 +181,32 @@ const getAllCompanies = async (req, res) => {
         }
       } catch (notifError) {
         console.error('Error fetching rejection notifications:', notifError);
-        // Fallback to just assigned companies if notification query fails
-        whereClause.assigned_to = parseInt(assigned_to);
+        // Fallback to assigned / template reviewer filters
+        const fallbackConditions = [];
+        if (assigned_to) fallbackConditions.push({ assigned_to: parseInt(assigned_to, 10) });
+        if (template_reviewer_id) {
+          fallbackConditions.push({ template_reviewer_id: parseInt(template_reviewer_id, 10) });
+        }
+        if (fallbackConditions.length > 1) {
+          whereClause[Op.or] = fallbackConditions;
+        } else if (fallbackConditions.length === 1) {
+          Object.assign(whereClause, fallbackConditions[0]);
+        }
         if (status) whereClause.status = status;
       }
     } else {
-      if (assigned_to) whereClause.assigned_to = parseInt(assigned_to);
+      if (assigned_to || template_reviewer_id) {
+        const conditions = [];
+        if (assigned_to) conditions.push({ assigned_to: parseInt(assigned_to, 10) });
+        if (template_reviewer_id) {
+          conditions.push({ template_reviewer_id: parseInt(template_reviewer_id, 10) });
+        }
+        if (conditions.length > 1) {
+          whereClause[Op.or] = conditions;
+        } else {
+          Object.assign(whereClause, conditions[0]);
+        }
+      }
       if (status) whereClause.status = status;
     }
     
@@ -189,6 +227,11 @@ const getAllCompanies = async (req, res) => {
           attributes: ['id', 'name', 'email']
         },
         {
+          model: User,
+          as: 'templateReviewer',
+          attributes: ['id', 'name', 'email']
+        },
+        {
           model: Case,
           as: 'case',
           attributes: ['id', 'case_id', 'case_title', 'client_name']
@@ -197,7 +240,17 @@ const getAllCompanies = async (req, res) => {
       order: [['createdAt', 'DESC']]
     });
 
-    res.json({ companies });
+    // Deduplicate when OR conditions return the same company twice
+    const uniqueCompanies = [];
+    const seenIds = new Set();
+    for (const company of companies) {
+      if (!seenIds.has(company.id)) {
+        seenIds.add(company.id);
+        uniqueCompanies.push(company);
+      }
+    }
+
+    res.json({ companies: uniqueCompanies });
   } catch (error) {
     console.error('Error fetching companies:', error);
     console.error('Error stack:', error.stack);
@@ -283,6 +336,11 @@ const getCompanyDetails = async (req, res) => {
         {
           model: User,
           as: 'assignedUser',
+          attributes: ['id', 'name', 'email']
+        },
+        {
+          model: User,
+          as: 'templateReviewer',
           attributes: ['id', 'name', 'email']
         },
         {
@@ -768,14 +826,18 @@ const rejectCompanyReview = async (req, res) => {
       return res.status(404).json({ error: 'Company not found' });
     }
 
-    if (company.assigned_to !== reviewerId) {
+    const isAssignedReviewer =
+      company.assigned_to === reviewerId ||
+      company.template_reviewer_id === reviewerId;
+
+    if (!isAssignedReviewer) {
       return res.status(403).json({ error: 'You can only reject companies assigned to you' });
     }
 
-    // Update company status to rejected and unassign from reviewer
+    // Update company status to rejected and reassign to original creator
     await company.update({
       status: 'rejected',
-      assigned_to: company.created_by // Reassign to original creator
+      assigned_to: company.created_by
     });
 
     // Get company with case details for notification
@@ -1154,24 +1216,19 @@ const submitForTemplateReview = async (req, res) => {
     // Only update assigned_to if company is not currently in data review
     const isInDataReview = company.status === 'in_review' && company.assigned_to !== null;
     
-    const updateData = {};
+    const updateData = {
+      template_reviewer_id: parseInt(template_reviewer_id, 10),
+    };
     
-    // If company is NOT in data review, we can safely update assigned_to for template review
-    // If company IS in data review, we keep the data reviewer assignment
+    // If company is NOT in data review, we can assign to template reviewer
     if (!isInDataReview) {
-      // Company is not in data review, so we can assign to template reviewer
-      updateData.assigned_to = parseInt(template_reviewer_id);
-      // Set status to in_review for template review
+      updateData.assigned_to = parseInt(template_reviewer_id, 10);
       if (company.status !== 'in_review') {
         updateData.status = 'in_review';
       }
     }
-    // If company IS in data review, we don't change assigned_to or status
-    // The template reviewer will access it through template review page based on templates
 
-    if (Object.keys(updateData).length > 0) {
-      await company.update(updateData);
-    }
+    await company.update(updateData);
 
     // Mark all selected templates as pending template review
     await CompanyTemplate.update(
@@ -1195,6 +1252,11 @@ const submitForTemplateReview = async (req, res) => {
           model: User,
           as: 'assignedUser',
           attributes: ['id', 'name', 'email']
+        },
+        {
+          model: User,
+          as: 'templateReviewer',
+          attributes: ['id', 'name', 'email']
         }
       ]
     });
@@ -1204,7 +1266,8 @@ const submitForTemplateReview = async (req, res) => {
         ? 'Company submitted for template review. Data review is already in progress and will continue separately.'
         : 'Company submitted for template review successfully',
       company: updatedCompany,
-      isInDataReview: isInDataReview
+      isInDataReview: isInDataReview,
+      templateReviewer: updatedCompany?.templateReviewer || templateReviewer
     });
   } catch (error) {
     console.error('Error submitting company for template review:', error);

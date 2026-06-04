@@ -38,6 +38,14 @@ module.exports = (sequelize) => {
         model: 'users',
         key: 'id'
       }
+    },
+    template_reviewer_id: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      references: {
+        model: 'users',
+        key: 'id'
+      }
     }
   }, {
     tableName: 'companies',
