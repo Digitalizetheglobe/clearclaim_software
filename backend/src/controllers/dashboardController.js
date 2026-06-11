@@ -46,9 +46,9 @@ const DASHBOARD_FILTERS = {
   },
   pending_attention: {
     title: 'Folios Pending Attention',
-    description: 'Companies not yet completed (SLA / ageing)',
+    description: 'Companies in active workflow needing attention (SLA / ageing) — excludes pending and completed',
     entity: 'company',
-    excludeCompleted: true
+    excludeStatuses: ['completed', 'pending']
   },
   active_cases: {
     title: 'Active Cases',
@@ -70,6 +70,45 @@ const DASHBOARD_FILTERS = {
   }
 };
 
+const getUserRoles = (user) => {
+  if (!user?.role) return [];
+  return Array.isArray(user.role) ? user.role : [user.role];
+};
+
+const isAdminUser = (user) => getUserRoles(user).includes('admin');
+
+const getUserId = (user) => parseInt(user?.id, 10);
+
+const buildCaseUserScope = (userId) => ({
+  [Op.or]: [
+    { assigned_to: userId },
+    { created_by: userId }
+  ]
+});
+
+const getScopedCaseIds = async (userId) => {
+  const cases = await Case.findAll({
+    where: buildCaseUserScope(userId),
+    attributes: ['id']
+  });
+  return cases.map((caseItem) => caseItem.id);
+};
+
+const buildCompanyUserScope = async (userId) => {
+  const caseIds = await getScopedCaseIds(userId);
+  const conditions = [
+    { assigned_to: userId },
+    { template_reviewer_id: userId },
+    { created_by: userId }
+  ];
+
+  if (caseIds.length > 0) {
+    conditions.push({ case_id: { [Op.in]: caseIds } });
+  }
+
+  return { [Op.or]: conditions };
+};
+
 const getDashboardDetails = async (req, res) => {
   try {
     const { filter } = req.params;
@@ -82,9 +121,19 @@ const getDashboardDetails = async (req, res) => {
       });
     }
 
+    const isAdmin = isAdminUser(req.user);
+    const userId = getUserId(req.user);
+
     if (config.entity === 'company') {
       const whereClause = {};
-      if (config.excludeCompleted) {
+
+      if (!isAdmin && userId) {
+        Object.assign(whereClause, await buildCompanyUserScope(userId));
+      }
+
+      if (config.excludeStatuses?.length) {
+        whereClause.status = { [Op.notIn]: config.excludeStatuses };
+      } else if (config.excludeCompleted) {
         whereClause.status = { [Op.ne]: 'completed' };
       } else if (config.statuses?.length) {
         whereClause.status = { [Op.in]: config.statuses };
@@ -122,7 +171,13 @@ const getDashboardDetails = async (req, res) => {
       });
     }
 
+    const whereClause = {};
+    if (!isAdmin && userId) {
+      Object.assign(whereClause, buildCaseUserScope(userId));
+    }
+
     const cases = await Case.findAll({
+      where: whereClause,
       include: [
         {
           model: User,

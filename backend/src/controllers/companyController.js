@@ -1,6 +1,7 @@
 const { Company, CompanyValue, CompanyNote, User, Case, CaseField, CompanyTemplate, Notification, CompanyStatus } = require('../models');
 const { sequelize } = require('../config/database');
 const { Op } = require('sequelize');
+const { buildReviewerAssignmentConditions } = require('../utils/reviewAssignment');
 
 const DEFAULT_COMPANY_STATUSES = [
   { name: 'Pending', value: 'pending', color: '#f59e0b' },
@@ -98,7 +99,15 @@ const companyHasWorkData = async (companyId) => {
 // Get all companies (with optional filters)
 const getAllCompanies = async (req, res) => {
   try {
-    const { assigned_to, template_reviewer_id, status, case_id, include_rejected_by, rejection_type } = req.query;
+    const {
+      assigned_to,
+      template_reviewer_id,
+      status,
+      case_id,
+      include_rejected_by,
+      rejection_type,
+      review_type
+    } = req.query;
     
     let whereClause = {};
     const reviewerIdForRejections = parseInt(assigned_to || template_reviewer_id, 10);
@@ -145,22 +154,18 @@ const getAllCompanies = async (req, res) => {
         // Remove duplicates
         const uniqueRejectedIds = [...new Set(rejectedCompanyIds)];
         
-        // Build the where clause
-        const conditions = [];
-        
-        // Add assigned companies condition
-        if (assigned_to) {
-          const assignedCondition = { assigned_to: parseInt(assigned_to, 10) };
+        // Build the where clause (segregate data vs template review when review_type is set)
+        const assignmentConditions = buildReviewerAssignmentConditions({
+          assigned_to,
+          template_reviewer_id,
+          review_type
+        });
+        const conditions = assignmentConditions.map((condition) => {
           if (status && status !== 'rejected') {
-            assignedCondition.status = status;
+            return { ...condition, status };
           }
-          conditions.push(assignedCondition);
-        }
-
-        // Include companies where this user is the template reviewer
-        if (template_reviewer_id) {
-          conditions.push({ template_reviewer_id: parseInt(template_reviewer_id, 10) });
-        }
+          return condition;
+        });
         
         // Add rejected companies condition if any exist
         if (uniqueRejectedIds.length > 0) {
@@ -182,11 +187,11 @@ const getAllCompanies = async (req, res) => {
       } catch (notifError) {
         console.error('Error fetching rejection notifications:', notifError);
         // Fallback to assigned / template reviewer filters
-        const fallbackConditions = [];
-        if (assigned_to) fallbackConditions.push({ assigned_to: parseInt(assigned_to, 10) });
-        if (template_reviewer_id) {
-          fallbackConditions.push({ template_reviewer_id: parseInt(template_reviewer_id, 10) });
-        }
+        const fallbackConditions = buildReviewerAssignmentConditions({
+          assigned_to,
+          template_reviewer_id,
+          review_type
+        });
         if (fallbackConditions.length > 1) {
           whereClause[Op.or] = fallbackConditions;
         } else if (fallbackConditions.length === 1) {
@@ -196,14 +201,14 @@ const getAllCompanies = async (req, res) => {
       }
     } else {
       if (assigned_to || template_reviewer_id) {
-        const conditions = [];
-        if (assigned_to) conditions.push({ assigned_to: parseInt(assigned_to, 10) });
-        if (template_reviewer_id) {
-          conditions.push({ template_reviewer_id: parseInt(template_reviewer_id, 10) });
-        }
+        const conditions = buildReviewerAssignmentConditions({
+          assigned_to,
+          template_reviewer_id,
+          review_type
+        });
         if (conditions.length > 1) {
           whereClause[Op.or] = conditions;
-        } else {
+        } else if (conditions.length === 1) {
           Object.assign(whereClause, conditions[0]);
         }
       }
