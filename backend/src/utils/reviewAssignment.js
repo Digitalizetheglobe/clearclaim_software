@@ -27,8 +27,12 @@ const buildReviewerAssignmentConditions = ({
   }
 
   if (review_type === 'template') {
-    if (!isTemplateReviewerColumnAvailable()) return [];
-    return templateReviewerId != null ? [{ template_reviewer_id: templateReviewerId }] : [];
+    if (templateReviewerId == null) return [];
+    // Legacy fallback when DB column is missing: template review used assigned_to
+    if (!isTemplateReviewerColumnAvailable()) {
+      return [{ assigned_to: templateReviewerId }];
+    }
+    return [{ template_reviewer_id: templateReviewerId }];
   }
 
   const conditions = [];

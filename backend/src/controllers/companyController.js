@@ -1174,12 +1174,7 @@ const getReviewerStats = async (req, res) => {
 // Submit company for template review (separate from data review)
 const submitForTemplateReview = async (req, res) => {
   try {
-    if (!isTemplateReviewerColumnAvailable()) {
-      return res.status(503).json({
-        error: 'Template reviewer assignment is not available until the database migration is applied.'
-      });
-    }
-
+    const legacyTemplateReview = !isTemplateReviewerColumnAvailable();
     const { companyId } = req.params;
     const { template_reviewer_id } = req.body;
 
@@ -1223,13 +1218,23 @@ const submitForTemplateReview = async (req, res) => {
     // Only update assigned_to if company is not currently in data review
     const isInDataReview = company.status === 'in_review' && company.assigned_to !== null;
     
-    const updateData = {
-      template_reviewer_id: parseInt(template_reviewer_id, 10),
-    };
-    
-    // If company is NOT in data review, we can assign to template reviewer
+    if (legacyTemplateReview && isInDataReview) {
+      return res.status(409).json({
+        error:
+          'This company is already in data review. Parallel template review needs the template_reviewer_id database column — ask an admin to run the RDS migration.'
+      });
+    }
+
+    const reviewerId = parseInt(template_reviewer_id, 10);
+    const updateData = {};
+
+    if (!legacyTemplateReview) {
+      updateData.template_reviewer_id = reviewerId;
+    }
+
+    // Without template_reviewer_id column, template reviewer is tracked via assigned_to
     if (!isInDataReview) {
-      updateData.assigned_to = parseInt(template_reviewer_id, 10);
+      updateData.assigned_to = reviewerId;
       if (company.status !== 'in_review') {
         updateData.status = 'in_review';
       }
@@ -1264,13 +1269,27 @@ const submitForTemplateReview = async (req, res) => {
       ].filter(Boolean)
     });
 
-    res.json({ 
-      message: isInDataReview 
+    const companyPayload = updatedCompany
+      ? updatedCompany.toJSON()
+      : company.toJSON();
+
+    if (legacyTemplateReview) {
+      companyPayload.template_reviewer_id = reviewerId;
+      companyPayload.templateReviewer = {
+        id: templateReviewer.id,
+        name: templateReviewer.name,
+        email: templateReviewer.email
+      };
+    }
+
+    res.json({
+      message: isInDataReview && !legacyTemplateReview
         ? 'Company submitted for template review. Data review is already in progress and will continue separately.'
         : 'Company submitted for template review successfully',
-      company: updatedCompany,
+      company: companyPayload,
       isInDataReview: isInDataReview,
-      templateReviewer: updatedCompany?.templateReviewer || templateReviewer
+      templateReviewer: updatedCompany?.templateReviewer || templateReviewer,
+      legacyTemplateReview
     });
   } catch (error) {
     console.error('Error submitting company for template review:', error);
