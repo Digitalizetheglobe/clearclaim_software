@@ -1,4 +1,5 @@
 const { sequelize } = require('./src/config/database');
+const { ensureCompanySchema } = require('./src/utils/ensureCompanySchema');
 
 async function addTemplateReviewerIdColumn() {
   try {
@@ -7,25 +8,7 @@ async function addTemplateReviewerIdColumn() {
     await sequelize.authenticate();
     console.log('Database connection successful');
 
-    await sequelize.query(`
-      ALTER TABLE companies
-      ADD COLUMN IF NOT EXISTS template_reviewer_id INTEGER NULL;
-    `);
-
-    await sequelize.query(`
-      DO $$
-      BEGIN
-        IF NOT EXISTS (
-          SELECT 1
-          FROM pg_constraint
-          WHERE conname = 'companies_template_reviewer_id_fkey'
-        ) THEN
-          ALTER TABLE companies
-          ADD CONSTRAINT companies_template_reviewer_id_fkey
-          FOREIGN KEY (template_reviewer_id) REFERENCES users(id);
-        END IF;
-      END $$;
-    `);
+    await ensureCompanySchema(sequelize);
 
     console.log('template_reviewer_id column added to companies table');
     process.exit(0);

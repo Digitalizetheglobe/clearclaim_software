@@ -7,6 +7,7 @@ dotenv.config({ path: path.join(__dirname, '.env') });
 const express = require('express');
 const cors = require('cors');
 const { sequelize } = require('./src/config/database');
+const { ensureCompanySchema } = require('./src/utils/ensureCompanySchema');
 
 const app = express();
 
@@ -87,8 +88,10 @@ async function startServer() {
         console.error('Database sync failed:', syncError.message);
       }
     } else {
-      // Production: ensure inquiries table exists (safe, no alter)
+      // Production: run safe idempotent schema updates and ensure new tables exist
       try {
+        await ensureCompanySchema(sequelize);
+        console.log('Company schema verified (template_reviewer_id)');
         await models.Inquiry.sync();
         await models.ShareRecovery.sync();
         await models.Iepf.sync();
