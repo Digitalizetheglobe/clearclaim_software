@@ -1,5 +1,6 @@
 const { Company, Case, User } = require('../models');
 const { Op } = require('sequelize');
+const { isTemplateReviewerColumnAvailable } = require('../utils/companySchemaFeatures');
 
 const DASHBOARD_FILTERS = {
   active_folios: {
@@ -98,9 +99,12 @@ const buildCompanyUserScope = async (userId) => {
   const caseIds = await getScopedCaseIds(userId);
   const conditions = [
     { assigned_to: userId },
-    { template_reviewer_id: userId },
     { created_by: userId }
   ];
+
+  if (isTemplateReviewerColumnAvailable()) {
+    conditions.splice(1, 0, { template_reviewer_id: userId });
+  }
 
   if (caseIds.length > 0) {
     conditions.push({ case_id: { [Op.in]: caseIds } });

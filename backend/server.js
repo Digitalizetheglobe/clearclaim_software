@@ -7,7 +7,7 @@ dotenv.config({ path: path.join(__dirname, '.env') });
 const express = require('express');
 const cors = require('cors');
 const { sequelize } = require('./src/config/database');
-const { ensureCompanySchema } = require('./src/utils/ensureCompanySchema');
+const { initializeCompanySchemaFeatures } = require('./src/utils/companySchemaFeatures');
 
 const app = express();
 
@@ -79,7 +79,7 @@ async function startServer() {
   try {
     await sequelize.authenticate();
     console.log('Database connected successfully');
-    
+
     if (process.env.NODE_ENV === 'development') {
       try {
         await sequelize.sync({ alter: true });
@@ -88,10 +88,7 @@ async function startServer() {
         console.error('Database sync failed:', syncError.message);
       }
     } else {
-      // Production: run safe idempotent schema updates and ensure new tables exist
       try {
-        await ensureCompanySchema(sequelize);
-        console.log('Company schema verified (template_reviewer_id)');
         await models.Inquiry.sync();
         await models.ShareRecovery.sync();
         await models.Iepf.sync();
@@ -101,6 +98,8 @@ async function startServer() {
         console.error('Tables sync failed:', syncError.message);
       }
     }
+
+    await initializeCompanySchemaFeatures(sequelize, models.Company);
     
     app.listen(PORT, () => {
       console.log(`Server running on port ${PORT}`);

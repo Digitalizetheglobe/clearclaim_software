@@ -2,6 +2,10 @@ const { Company, CompanyValue, CompanyNote, User, Case, CaseField, CompanyTempla
 const { sequelize } = require('../config/database');
 const { Op } = require('sequelize');
 const { buildReviewerAssignmentConditions } = require('../utils/reviewAssignment');
+const {
+  getTemplateReviewerInclude,
+  isTemplateReviewerColumnAvailable
+} = require('../utils/companySchemaFeatures');
 
 const DEFAULT_COMPANY_STATUSES = [
   { name: 'Pending', value: 'pending', color: '#f59e0b' },
@@ -231,17 +235,13 @@ const getAllCompanies = async (req, res) => {
           as: 'createdByUser',
           attributes: ['id', 'name', 'email']
         },
-        {
-          model: User,
-          as: 'templateReviewer',
-          attributes: ['id', 'name', 'email']
-        },
+        getTemplateReviewerInclude(User),
         {
           model: Case,
           as: 'case',
           attributes: ['id', 'case_id', 'case_title', 'client_name']
         }
-      ],
+      ].filter(Boolean),
       order: [['createdAt', 'DESC']]
     });
 
@@ -343,17 +343,13 @@ const getCompanyDetails = async (req, res) => {
           as: 'assignedUser',
           attributes: ['id', 'name', 'email']
         },
-        {
-          model: User,
-          as: 'templateReviewer',
-          attributes: ['id', 'name', 'email']
-        },
+        getTemplateReviewerInclude(User),
         {
           model: Case,
           as: 'case',
           attributes: ['id', 'case_id', 'case_title', 'client_name']
         }
-      ]
+      ].filter(Boolean)
     });
 
     if (!company) {
@@ -1178,6 +1174,12 @@ const getReviewerStats = async (req, res) => {
 // Submit company for template review (separate from data review)
 const submitForTemplateReview = async (req, res) => {
   try {
+    if (!isTemplateReviewerColumnAvailable()) {
+      return res.status(503).json({
+        error: 'Template reviewer assignment is not available until the database migration is applied.'
+      });
+    }
+
     const { companyId } = req.params;
     const { template_reviewer_id } = req.body;
 
@@ -1258,12 +1260,8 @@ const submitForTemplateReview = async (req, res) => {
           as: 'assignedUser',
           attributes: ['id', 'name', 'email']
         },
-        {
-          model: User,
-          as: 'templateReviewer',
-          attributes: ['id', 'name', 'email']
-        }
-      ]
+        getTemplateReviewerInclude(User)
+      ].filter(Boolean)
     });
 
     res.json({ 

@@ -1,3 +1,5 @@
+const { isTemplateReviewerColumnAvailable } = require('./companySchemaFeatures');
+
 const PENDING_REVIEW_STATUSES = ['pending', 'in_progress', 'in_review'];
 
 const parseReviewerId = (value) => {
@@ -25,12 +27,13 @@ const buildReviewerAssignmentConditions = ({
   }
 
   if (review_type === 'template') {
+    if (!isTemplateReviewerColumnAvailable()) return [];
     return templateReviewerId != null ? [{ template_reviewer_id: templateReviewerId }] : [];
   }
 
   const conditions = [];
   if (assignedId != null) conditions.push({ assigned_to: assignedId });
-  if (templateReviewerId != null) {
+  if (templateReviewerId != null && isTemplateReviewerColumnAvailable()) {
     conditions.push({ template_reviewer_id: templateReviewerId });
   }
   return conditions;
@@ -42,7 +45,7 @@ const isDataReviewAssignment = (company, userId) => {
 };
 
 const isTemplateReviewAssignment = (company, userId) => {
-  if (!company || userId == null) return false;
+  if (!company || userId == null || !isTemplateReviewerColumnAvailable()) return false;
   return Number(company.template_reviewer_id) === Number(userId);
 };
 
