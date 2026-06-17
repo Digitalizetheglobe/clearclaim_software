@@ -750,12 +750,26 @@ const approveCompanyReview = async (req, res) => {
       return res.status(404).json({ error: 'Company not found' });
     }
 
-    if (company.assigned_to !== reviewerId) {
+    const isAssignedDataReviewer =
+      isDataReviewer && Number(company.assigned_to) === Number(reviewerId);
+    const isAssignedTemplateReviewer =
+      isTemplateReviewer &&
+      (Number(company.template_reviewer_id) === Number(reviewerId) ||
+        Number(company.assigned_to) === Number(reviewerId));
+
+    if (!isAssignedDataReviewer && !isAssignedTemplateReviewer) {
       return res.status(403).json({ error: 'You can only approve companies assigned to you' });
     }
 
     // Update company status to completed
     await company.update({ status: 'completed' });
+
+    if (isTemplateReviewer) {
+      await CompanyTemplate.update(
+        { review_status: 'done' },
+        { where: { company_id: companyId, is_selected: true } }
+      );
+    }
 
     // Get company with case details for notification
     const companyWithCase = await Company.findByPk(companyId, {

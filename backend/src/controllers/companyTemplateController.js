@@ -2595,15 +2595,23 @@ const getSelectedTemplates = async (req, res) => {
   }
 };
 
-// Update admin comment for a template (ADMIN ONLY)
+const getRequestUserRoles = (user) => {
+  if (!user?.role) return [];
+  return Array.isArray(user.role) ? user.role : [user.role];
+};
+
+const canUpdateTemplateReview = (user) => {
+  const roles = getRequestUserRoles(user);
+  return roles.includes('admin') || roles.includes('template_reviewer');
+};
+
+// Update admin comment / review status (admin or template reviewer)
 const updateTemplateComment = async (req, res) => {
   try {
-    // Check if user is admin
-    const userRole = req.user?.role;
-    if (userRole !== 'admin') {
+    if (!canUpdateTemplateReview(req.user)) {
       return res.status(403).json({
         success: false,
-        error: 'Access denied. Only admins can update template comments and review status.'
+        error: 'Access denied. Only admins and template reviewers can update template comments and review status.'
       });
     }
 
