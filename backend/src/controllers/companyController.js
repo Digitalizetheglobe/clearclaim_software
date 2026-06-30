@@ -41,10 +41,7 @@ const canEditCompanyInReview = (user, company) => {
   return isReviewer && isAssignedReviewer;
 };
 
-const isDataOrTemplateReviewerUser = (user) => {
-  const roles = getUserRoles(user);
-  return roles.includes('data_reviewer') || roles.includes('template_reviewer');
-};
+const isDataReviewerUser = (user) => getUserRoles(user).includes('data_reviewer');
 
 const getCompanyOwnerIdsForReview = (company) => {
   const ids = new Set();
@@ -54,13 +51,24 @@ const getCompanyOwnerIdsForReview = (company) => {
   return ids;
 };
 
-const fetchEligibleDataReviewers = async (company) => {
+const getExcludedIdsForDataReview = (company, requestUserId = null) => {
+  const ids = getCompanyOwnerIdsForReview(company);
+  if (company.template_reviewer_id != null) {
+    ids.add(Number(company.template_reviewer_id));
+  }
+  if (requestUserId != null) {
+    ids.add(Number(requestUserId));
+  }
+  return ids;
+};
+
+const fetchEligibleDataReviewers = async (company, requestUserId = null) => {
   const allUsers = await User.findAll({
     attributes: ['id', 'name', 'email', 'role']
   });
-  const ownerIds = getCompanyOwnerIdsForReview(company);
+  const excludedIds = getExcludedIdsForDataReview(company, requestUserId);
   return allUsers
-    .filter((user) => isDataOrTemplateReviewerUser(user) && !ownerIds.has(Number(user.id)))
+    .filter((user) => isDataReviewerUser(user) && !excludedIds.has(Number(user.id)))
     .sort((a, b) => Number(a.id) - Number(b.id));
 };
 
@@ -754,24 +762,13 @@ const approveCompanyReview = async (req, res) => {
       isDataReviewer && Number(company.assigned_to) === Number(reviewerId);
     const isAssignedTemplateReviewer =
       isTemplateReviewer &&
-      (Number(company.template_reviewer_id) === Number(reviewerId) ||
-        Number(company.assigned_to) === Number(reviewerId));
+      isTemplateReviewerColumnAvailable() &&
+      Number(company.template_reviewer_id) === Number(reviewerId);
 
     if (!isAssignedDataReviewer && !isAssignedTemplateReviewer) {
       return res.status(403).json({ error: 'You can only approve companies assigned to you' });
     }
 
-    // Update company status to completed
-    await company.update({ status: 'completed' });
-
-    if (isTemplateReviewer) {
-      await CompanyTemplate.update(
-        { review_status: 'done' },
-        { where: { company_id: companyId, is_selected: true } }
-      );
-    }
-
-    // Get company with case details for notification
     const companyWithCase = await Company.findByPk(companyId, {
       include: [{
         model: Case,
@@ -780,22 +777,52 @@ const approveCompanyReview = async (req, res) => {
       }]
     });
 
-    // Determine review type and create appropriate notification
-    const reviewType = isDataReviewer ? 'data_review' : 'template_review';
-    
-    // Create notification for the employee who created the company
+    if (isAssignedDataReviewer) {
+      await company.update({ status: 'completed' });
+
+      if (company.created_by) {
+        await Notification.create({
+          user_id: company.created_by,
+          company_id: companyId,
+          case_id: company.case_id,
+          type: 'data_review_approved',
+          title: 'Data Review Approved',
+          message: `Your company "${company.company_name}" has been approved by ${reviewer.name}. ${companyWithCase.case ? `Case: ${companyWithCase.case.case_title}` : ''}`,
+          metadata: {
+            reviewer_name: reviewer.name,
+            reviewer_email: reviewer.email,
+            review_type: 'data_review',
+            company_name: company.company_name,
+            case_title: companyWithCase.case?.case_title,
+            case_id: companyWithCase.case?.case_id
+          }
+        });
+      }
+
+      return res.json({
+        message: 'Company approved successfully. Ready for template generation.',
+        company: company.toJSON(),
+        review_type: 'data'
+      });
+    }
+
+    await CompanyTemplate.update(
+      { review_status: 'done' },
+      { where: { company_id: companyId, is_selected: true } }
+    );
+
     if (company.created_by) {
       await Notification.create({
         user_id: company.created_by,
         company_id: companyId,
         case_id: company.case_id,
-        type: isDataReviewer ? 'data_review_approved' : 'template_review_approved',
-        title: `${isDataReviewer ? 'Data Review' : 'Template Review'} Approved`,
-        message: `Your company "${company.company_name}" has been approved by ${reviewer.name}. ${companyWithCase.case ? `Case: ${companyWithCase.case.case_title}` : ''}`,
+        type: 'template_review_approved',
+        title: 'Template Review Approved',
+        message: `Your company "${company.company_name}" templates have been approved by ${reviewer.name}. ${companyWithCase.case ? `Case: ${companyWithCase.case.case_title}` : ''}`,
         metadata: {
           reviewer_name: reviewer.name,
           reviewer_email: reviewer.email,
-          review_type: reviewType,
+          review_type: 'template_review',
           company_name: company.company_name,
           case_title: companyWithCase.case?.case_title,
           case_id: companyWithCase.case?.case_id
@@ -804,8 +831,9 @@ const approveCompanyReview = async (req, res) => {
     }
 
     res.json({
-      message: 'Company approved successfully. Ready for template generation.',
-      company: company.toJSON()
+      message: 'Templates approved successfully.',
+      company: company.toJSON(),
+      review_type: 'template'
     });
   } catch (error) {
     console.error('Error approving company:', error);
@@ -841,15 +869,16 @@ const rejectCompanyReview = async (req, res) => {
       return res.status(404).json({ error: 'Company not found' });
     }
 
-    const isAssignedReviewer =
-      company.assigned_to === reviewerId ||
-      company.template_reviewer_id === reviewerId;
+    const isAssignedDataReviewer =
+      isDataReviewer && Number(company.assigned_to) === Number(reviewerId);
 
-    if (!isAssignedReviewer) {
-      return res.status(403).json({ error: 'You can only reject companies assigned to you' });
+    if (!isAssignedDataReviewer) {
+      return res.status(403).json({
+        error: 'You can only reject companies assigned to you for data review'
+      });
     }
 
-    // Update company status to rejected and reassign to original creator
+    // Data review rejection: send back to employee without affecting template reviewer
     await company.update({
       status: 'rejected',
       assigned_to: company.created_by
@@ -865,7 +894,7 @@ const rejectCompanyReview = async (req, res) => {
     });
 
     // Determine review type and create appropriate notification
-    const reviewType = isDataReviewer ? 'data_review' : 'template_review';
+    const reviewType = 'data_review';
     
     // Create notification for the employee who created the company
     if (company.created_by) {
@@ -873,8 +902,8 @@ const rejectCompanyReview = async (req, res) => {
         user_id: company.created_by,
         company_id: companyId,
         case_id: company.case_id,
-        type: isDataReviewer ? 'data_review_rejected' : 'template_review_rejected',
-        title: `${isDataReviewer ? 'Data Review' : 'Template Review'} Rejected`,
+        type: 'data_review_rejected',
+        title: 'Data Review Rejected',
         message: `Your company "${company.company_name}" has been rejected by ${reviewer.name} and sent back for corrections. ${rejection_reason ? `Reason: ${rejection_reason}` : ''} ${companyWithCase.case ? `Case: ${companyWithCase.case.case_title}` : ''}`,
         metadata: {
           reviewer_id: reviewerId, // Store reviewer ID to track who rejected
@@ -1049,11 +1078,11 @@ const assignForDataReview = async (req, res) => {
       });
     }
 
-    const eligibleReviewers = await fetchEligibleDataReviewers(company);
+    const eligibleReviewers = await fetchEligibleDataReviewers(company, req.user?.id);
     if (!eligibleReviewers.length) {
       return res.status(400).json({
         error:
-          'No eligible data reviewers available. Add a data or template reviewer, or ensure the assigned employee is not the only reviewer.'
+          'No eligible data reviewers available. Add a data reviewer who is not the company creator, template reviewer, or the person submitting for review.'
       });
     }
 
@@ -1216,6 +1245,25 @@ const submitForTemplateReview = async (req, res) => {
       return res.status(403).json({ error: 'Selected user is not a template reviewer' });
     }
 
+    const reviewerId = parseInt(template_reviewer_id, 10);
+
+    if (Number(company.created_by) === reviewerId) {
+      return res.status(400).json({
+        error: 'The employee who created this company cannot be assigned as its template reviewer.'
+      });
+    }
+
+    if (
+      !legacyTemplateReview &&
+      company.assigned_to != null &&
+      Number(company.assigned_to) === reviewerId
+    ) {
+      return res.status(400).json({
+        error:
+          'Template reviewer must be different from the data reviewer for this company. Choose another template reviewer.'
+      });
+    }
+
     // Check if company has selected templates
     const selectedTemplates = await CompanyTemplate.findAll({
       where: {
@@ -1229,7 +1277,7 @@ const submitForTemplateReview = async (req, res) => {
     }
 
     // IMPORTANT: Don't overwrite assigned_to if company is already in data review
-    // Only update assigned_to if company is not currently in data review
+    // Only update assigned_to if company is not currently in data review (legacy schema only)
     const isInDataReview = company.status === 'in_review' && company.assigned_to !== null;
     
     if (legacyTemplateReview && isInDataReview) {
@@ -1239,19 +1287,17 @@ const submitForTemplateReview = async (req, res) => {
       });
     }
 
-    const reviewerId = parseInt(template_reviewer_id, 10);
     const updateData = {};
 
-    if (!legacyTemplateReview) {
-      updateData.template_reviewer_id = reviewerId;
-    }
-
-    // Without template_reviewer_id column, template reviewer is tracked via assigned_to
-    if (!isInDataReview) {
+    if (legacyTemplateReview) {
+      // Legacy: template reviewer tracked via assigned_to when data review is not active
       updateData.assigned_to = reviewerId;
       if (company.status !== 'in_review') {
         updateData.status = 'in_review';
       }
+    } else {
+      // Modern: template review uses template_reviewer_id only — never touch assigned_to or status
+      updateData.template_reviewer_id = reviewerId;
     }
 
     await company.update(updateData);
