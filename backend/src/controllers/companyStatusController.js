@@ -1,11 +1,37 @@
 const { CompanyStatus, Company, Case } = require('../models');
 
 const DEFAULT_STATUSES = [
-  { name: 'Pending', value: 'pending', color: '#f59e0b' },
-  { name: 'In Progress', value: 'in_progress', color: '#2563eb' },
-  { name: 'In Review', value: 'in_review', color: '#7c3aed' },
-  { name: 'Completed', value: 'completed', color: '#16a34a' },
-  { name: 'Rejected', value: 'rejected', color: '#dc2626' }
+  { name: 'Excel Preparation', value: 'excel_preparation', color: '#2563eb', deadline_days: 2 },
+  { name: 'Excel Review', value: 'excel_review', color: '#0ea5e9', deadline_days: 1 },
+  { name: 'Excel Rectification', value: 'excel_rectification', color: '#f59e0b', deadline_days: 1 },
+  { name: 'Form Generation', value: 'form_generation', color: '#7c3aed', deadline_days: 1 },
+  { name: 'Digital Forms Review', value: 'digital_forms_review', color: '#8b5cf6', deadline_days: 1 },
+  { name: 'Form Printing', value: 'form_printing', color: '#6366f1', deadline_days: 1 },
+  { name: 'Legal Docs Prep', value: 'legal_docs_prep', color: '#0891b2', deadline_days: 3 },
+  { name: 'Claim Docket Prep', value: 'claim_docket_prep', color: '#06b6d4', deadline_days: 1 },
+  { name: 'Hard Copy Review', value: 'hard_copy_review', color: '#9333ea', deadline_days: 1 },
+  { name: 'Hard Copy Rectification', value: 'hard_copy_rectification', color: '#f97316', deadline_days: 1 },
+  { name: 'Envelop Preparation', value: 'envelop_preparation', color: '#0284c7', deadline_days: 1 },
+  { name: 'In Transit - Client', value: 'in_transit_client', color: '#14b8a6', deadline_days: 5 },
+  { name: 'Client Docket Review', value: 'client_docket_review', color: '#2563eb', deadline_days: 3 },
+  { name: 'In Transit - RTA', value: 'in_transit_rta', color: '#0d9488', deadline_days: 5 },
+  { name: 'Call RTA - Inward', value: 'call_rta_inward', color: '#3b82f6', deadline_days: 3 },
+  { name: 'POH Received', value: 'poh_received', color: '#16a34a', deadline_days: 2 },
+  { name: 'LOC Received', value: 'loc_received', color: '#22c55e', deadline_days: 2 },
+  { name: 'LOE Received', value: 'loe_received', color: '#4ade80', deadline_days: 2 },
+  { name: 'DRF - Form Filling', value: 'drf_form_filling', color: '#7c3aed', deadline_days: 1 },
+  { name: 'DRF - Hard Copy Review', value: 'drf_hard_copy_review', color: '#6d28d9', deadline_days: 1 },
+  { name: 'In Transit - DP', value: 'in_transit_dp', color: '#14b8a6', deadline_days: 5 },
+  { name: 'IEPF - Form Filling', value: 'iepf_form_filling', color: '#8b5cf6', deadline_days: 1 },
+  { name: 'IEPF - Hard Copy Review', value: 'iepf_hard_copy_review', color: '#7e22ce', deadline_days: 1 },
+  { name: 'IEPF - Legal Docs Prep', value: 'iepf_legal_docs_prep', color: '#0f766e', deadline_days: 3 },
+  { name: 'In Transit - Company', value: 'in_transit_company', color: '#0d9488', deadline_days: 5 },
+  { name: 'IEPF - Pending Receipt Upload', value: 'iepf_pending_receipt_upload', color: '#f59e0b', deadline_days: 1 },
+  { name: 'With Authorities', value: 'with_authorities', color: '#dc2626', deadline_days: 45 },
+  { name: 'Blocked', value: 'blocked', color: '#6b7280', deadline_days: 0 },
+  { name: 'Resolved - IEPF', value: 'resolved_iepf', color: '#16a34a', deadline_days: 180 },
+  { name: 'Resolved - DRF', value: 'resolved_drf', color: '#15803d', deadline_days: 45 },
+  { name: 'Closed', value: 'closed', color: '#1f2937', deadline_days: 0 }
 ];
 
 const toStatusValue = (input) =>
@@ -48,9 +74,13 @@ const getCompanyStatuses = async (req, res) => {
 
 const createCompanyStatus = async (req, res) => {
   try {
-    const { name, value, color } = req.body;
+    const { name, value, color, deadline_days } = req.body;
     const normalizedName = String(name || '').trim();
     const normalizedValue = toStatusValue(value || name);
+    const normalizedDeadlineDays =
+      deadline_days === undefined || deadline_days === null || deadline_days === ''
+        ? 0
+        : parseInt(deadline_days, 10);
 
     if (!normalizedName) {
       return res.status(400).json({ error: 'Status name is required' });
@@ -58,6 +88,10 @@ const createCompanyStatus = async (req, res) => {
 
     if (!normalizedValue) {
       return res.status(400).json({ error: 'Valid status value is required' });
+    }
+
+    if (Number.isNaN(normalizedDeadlineDays) || normalizedDeadlineDays < 0) {
+      return res.status(400).json({ error: 'deadline_days must be a number greater than or equal to 0' });
     }
 
     const exists = await CompanyStatus.findOne({ where: { value: normalizedValue } });
@@ -69,6 +103,7 @@ const createCompanyStatus = async (req, res) => {
       name: normalizedName,
       value: normalizedValue,
       color: color || '#6b7280',
+      deadline_days: normalizedDeadlineDays,
       is_active: true,
       created_by: req.user.id
     });
@@ -86,7 +121,7 @@ const createCompanyStatus = async (req, res) => {
 const updateCompanyStatusMaster = async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, color, is_active } = req.body;
+    const { name, color, is_active, deadline_days } = req.body;
 
     const status = await CompanyStatus.findByPk(id);
     if (!status) {
@@ -97,6 +132,13 @@ const updateCompanyStatusMaster = async (req, res) => {
     if (name !== undefined) updateData.name = String(name).trim();
     if (color !== undefined) updateData.color = color;
     if (is_active !== undefined) updateData.is_active = Boolean(is_active);
+    if (deadline_days !== undefined) {
+      const parsed = parseInt(deadline_days, 10);
+      if (Number.isNaN(parsed) || parsed < 0) {
+        return res.status(400).json({ error: 'deadline_days must be a number greater than or equal to 0' });
+      }
+      updateData.deadline_days = parsed;
+    }
 
     await status.update(updateData);
 

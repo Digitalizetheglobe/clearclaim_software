@@ -1,4 +1,4 @@
-const { Company, Case, User } = require('../models');
+const { Company, Case, User, CompanyStatus } = require('../models');
 const { Op } = require('sequelize');
 const { isTemplateReviewerColumnAvailable } = require('../utils/companySchemaFeatures');
 
@@ -113,6 +113,52 @@ const buildCompanyUserScope = async (userId) => {
   return { [Op.or]: conditions };
 };
 
+const normalizeStatusKey = (status) => String(status || '').trim().toLowerCase();
+
+const getWorkingDaysElapsed = (fromDate, toDate = new Date()) => {
+  const start = new Date(fromDate);
+  const end = new Date(toDate);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return 0;
+  if (start >= end) return 0;
+
+  const cursor = new Date(start);
+  cursor.setHours(0, 0, 0, 0);
+  const limit = new Date(end);
+  limit.setHours(0, 0, 0, 0);
+
+  let workingDays = 0;
+  while (cursor < limit) {
+    const day = cursor.getDay();
+    if (day !== 0 && day !== 6) {
+      workingDays += 1;
+    }
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  return workingDays;
+};
+
+const buildStatusDeadlineMap = async () => {
+  const statuses = await CompanyStatus.findAll({
+    attributes: ['value', 'deadline_days']
+  });
+
+  const map = new Map();
+  statuses.forEach((status) => {
+    map.set(normalizeStatusKey(status.value), Number(status.deadline_days) || 0);
+  });
+  return map;
+};
+
+const isCompanySlaBreached = (company, deadlineMap) => {
+  const statusKey = normalizeStatusKey(company?.status);
+  const deadlineDays = Number(deadlineMap.get(statusKey) || 0);
+  if (deadlineDays <= 0) return false;
+
+  const since = company?.updatedAt || company?.updated_at || company?.createdAt || company?.created_at;
+  const workingDaysElapsed = getWorkingDaysElapsed(since);
+  return workingDaysElapsed > deadlineDays;
+};
+
 const getDashboardDetails = async (req, res) => {
   try {
     const { filter } = req.params;
@@ -165,13 +211,19 @@ const getDashboardDetails = async (req, res) => {
         order: [['updatedAt', 'DESC']]
       });
 
+      let items = companies;
+      if (filter === 'pending_attention') {
+        const deadlineMap = await buildStatusDeadlineMap();
+        items = companies.filter((company) => isCompanySlaBreached(company, deadlineMap));
+      }
+
       return res.json({
         filter,
         title: config.title,
         description: config.description,
         entity: 'company',
-        items: companies,
-        total: companies.length
+        items,
+        total: items.length
       });
     }
 

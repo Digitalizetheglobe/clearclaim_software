@@ -23,6 +23,14 @@ module.exports = (sequelize) => {
         allowNull: true,
         defaultValue: '#6b7280'
       },
+      deadline_days: {
+        type: DataTypes.INTEGER,
+        allowNull: false,
+        defaultValue: 0,
+        validate: {
+          min: 0
+        }
+      },
       is_active: {
         type: DataTypes.BOOLEAN,
         defaultValue: true
