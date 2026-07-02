@@ -29,6 +29,11 @@ const statements = [
    USING status::text`,
   `INSERT INTO company_statuses (name, value, color, deadline_days, is_active, created_at, updated_at)
    VALUES
+   ('Pending', 'pending', '#f59e0b', 0, TRUE, NOW(), NOW()),
+   ('In Progress', 'in_progress', '#2563eb', 2, TRUE, NOW(), NOW()),
+   ('In Review', 'in_review', '#7c3aed', 2, TRUE, NOW(), NOW()),
+   ('Completed', 'completed', '#16a34a', 0, TRUE, NOW(), NOW()),
+   ('Rejected', 'rejected', '#dc2626', 0, TRUE, NOW(), NOW()),
    ('Excel Preparation', 'excel_preparation', '#2563eb', 2, TRUE, NOW(), NOW()),
    ('Excel Review', 'excel_review', '#0ea5e9', 1, TRUE, NOW(), NOW()),
    ('Excel Rectification', 'excel_rectification', '#f59e0b', 1, TRUE, NOW(), NOW()),

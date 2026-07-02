@@ -1,6 +1,11 @@
 const { CompanyStatus, Company, Case } = require('../models');
 
 const DEFAULT_STATUSES = [
+  { name: 'Pending', value: 'pending', color: '#f59e0b', deadline_days: 0 },
+  { name: 'In Progress', value: 'in_progress', color: '#2563eb', deadline_days: 2 },
+  { name: 'In Review', value: 'in_review', color: '#7c3aed', deadline_days: 2 },
+  { name: 'Completed', value: 'completed', color: '#16a34a', deadline_days: 0 },
+  { name: 'Rejected', value: 'rejected', color: '#dc2626', deadline_days: 0 },
   { name: 'Excel Preparation', value: 'excel_preparation', color: '#2563eb', deadline_days: 2 },
   { name: 'Excel Review', value: 'excel_review', color: '#0ea5e9', deadline_days: 1 },
   { name: 'Excel Rectification', value: 'excel_rectification', color: '#f59e0b', deadline_days: 1 },
