@@ -1,6 +1,10 @@
 const { Company, Case, User, CompanyStatus } = require('../models');
 const { Op } = require('sequelize');
-const { isTemplateReviewerColumnAvailable } = require('../utils/companySchemaFeatures');
+const {
+  isTemplateReviewerColumnAvailable,
+  isStatusDeadlineDaysColumnAvailable
+} = require('../utils/companySchemaFeatures');
+const { DEFAULT_STATUSES } = require('../constants/defaultCompanyStatuses');
 
 const DASHBOARD_FILTERS = {
   active_folios: {
@@ -138,11 +142,19 @@ const getWorkingDaysElapsed = (fromDate, toDate = new Date()) => {
 };
 
 const buildStatusDeadlineMap = async () => {
+  const map = new Map();
+
+  if (!isStatusDeadlineDaysColumnAvailable()) {
+    DEFAULT_STATUSES.forEach((status) => {
+      map.set(normalizeStatusKey(status.value), Number(status.deadline_days) || 0);
+    });
+    return map;
+  }
+
   const statuses = await CompanyStatus.findAll({
     attributes: ['value', 'deadline_days']
   });
 
-  const map = new Map();
   statuses.forEach((status) => {
     map.set(normalizeStatusKey(status.value), Number(status.deadline_days) || 0);
   });

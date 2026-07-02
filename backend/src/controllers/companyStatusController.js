@@ -1,5 +1,10 @@
 const { CompanyStatus, Company, Case } = require('../models');
 const { DEFAULT_STATUSES } = require('../constants/defaultCompanyStatuses');
+const { isStatusDeadlineDaysColumnAvailable } = require('../utils/companySchemaFeatures');
+
+const deadlineDaysByValue = new Map(
+  DEFAULT_STATUSES.map((status) => [status.value, status.deadline_days])
+);
 
 const toStatusValue = (input) =>
   String(input || '')
@@ -8,11 +13,40 @@ const toStatusValue = (input) =>
     .replace(/\s+/g, '_')
     .replace(/[^a-z0-9_]/g, '');
 
+const buildStatusDefaults = (status) => {
+  const defaults = {
+    name: status.name,
+    value: status.value,
+    color: status.color,
+    is_active: true
+  };
+
+  if (isStatusDeadlineDaysColumnAvailable()) {
+    defaults.deadline_days = status.deadline_days;
+  }
+
+  return defaults;
+};
+
+const enrichStatuses = (statuses) => {
+  if (isStatusDeadlineDaysColumnAvailable()) {
+    return statuses;
+  }
+
+  return statuses.map((status) => {
+    const plain = status.toJSON ? status.toJSON() : status;
+    return {
+      ...plain,
+      deadline_days: deadlineDaysByValue.get(plain.value) ?? 0
+    };
+  });
+};
+
 const ensureDefaults = async () => {
   for (const status of DEFAULT_STATUSES) {
     await CompanyStatus.findOrCreate({
       where: { value: status.value },
-      defaults: status
+      defaults: buildStatusDefaults(status)
     });
   }
 };
@@ -32,7 +66,7 @@ const getCompanyStatuses = async (req, res) => {
       ]
     });
 
-    res.json({ statuses });
+    res.json({ statuses: enrichStatuses(statuses) });
   } catch (error) {
     console.error('Error fetching company statuses:', error);
     res.status(500).json({ error: 'Failed to fetch company statuses' });
@@ -57,8 +91,10 @@ const createCompanyStatus = async (req, res) => {
       return res.status(400).json({ error: 'Valid status value is required' });
     }
 
-    if (Number.isNaN(normalizedDeadlineDays) || normalizedDeadlineDays < 0) {
-      return res.status(400).json({ error: 'deadline_days must be a number greater than or equal to 0' });
+    if (isStatusDeadlineDaysColumnAvailable()) {
+      if (Number.isNaN(normalizedDeadlineDays) || normalizedDeadlineDays < 0) {
+        return res.status(400).json({ error: 'deadline_days must be a number greater than or equal to 0' });
+      }
     }
 
     const exists = await CompanyStatus.findOne({ where: { value: normalizedValue } });
@@ -66,14 +102,19 @@ const createCompanyStatus = async (req, res) => {
       return res.status(400).json({ error: 'Status already exists' });
     }
 
-    const status = await CompanyStatus.create({
+    const createData = {
       name: normalizedName,
       value: normalizedValue,
       color: color || '#6b7280',
-      deadline_days: normalizedDeadlineDays,
       is_active: true,
       created_by: req.user.id
-    });
+    };
+
+    if (isStatusDeadlineDaysColumnAvailable()) {
+      createData.deadline_days = normalizedDeadlineDays;
+    }
+
+    const status = await CompanyStatus.create(createData);
 
     res.status(201).json({
       message: 'Company status created successfully',
@@ -99,7 +140,7 @@ const updateCompanyStatusMaster = async (req, res) => {
     if (name !== undefined) updateData.name = String(name).trim();
     if (color !== undefined) updateData.color = color;
     if (is_active !== undefined) updateData.is_active = Boolean(is_active);
-    if (deadline_days !== undefined) {
+    if (deadline_days !== undefined && isStatusDeadlineDaysColumnAvailable()) {
       const parsed = parseInt(deadline_days, 10);
       if (Number.isNaN(parsed) || parsed < 0) {
         return res.status(400).json({ error: 'deadline_days must be a number greater than or equal to 0' });

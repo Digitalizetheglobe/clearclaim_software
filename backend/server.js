@@ -99,7 +99,7 @@ async function startServer() {
       }
     }
 
-    await initializeCompanySchemaFeatures(sequelize, models.Company);
+    await initializeCompanySchemaFeatures(sequelize, models);
     
     app.listen(PORT, () => {
       console.log(`Server running on port ${PORT}`);
