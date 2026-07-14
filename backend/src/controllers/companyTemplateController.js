@@ -2647,14 +2647,47 @@ const updateTemplateComment = async (req, res) => {
         error: 'Template not found'
       });
     }
+
+    const templateRow = updatedTemplate[1]?.[0] || await models.CompanyTemplate.findByPk(templateId);
+    let companyStatusUpdated = null;
+
+    // Auto company status when all selected templates reach a final decision
+    if (review_status && templateRow?.company_id) {
+      const selected = await models.CompanyTemplate.findAll({
+        where: { company_id: templateRow.company_id, is_selected: true },
+        attributes: ['id', 'review_status']
+      });
+      const statuses = selected.map((t) =>
+        String(t.review_status || '').toLowerCase().trim()
+      );
+      const allDone =
+        selected.length > 0 && statuses.every((s) => s === 'done');
+      const anyNeedImprove = statuses.some((s) => s === 'need_to_improve');
+
+      if (allDone) {
+        await models.Company.update(
+          { status: 'form_printing' },
+          { where: { id: templateRow.company_id } }
+        );
+        companyStatusUpdated = 'form_printing';
+      } else if (anyNeedImprove && review_status === 'need_to_improve') {
+        // Marking any template Need to Improve → Excel Rectification
+        await models.Company.update(
+          { status: 'excel_rectification' },
+          { where: { id: templateRow.company_id } }
+        );
+        companyStatusUpdated = 'excel_rectification';
+      }
+    }
     
     console.log(`✅ Template updated for template ${templateId}`);
-    console.log(`📋 Updated template:`, updatedTemplate[1][0]);
+    console.log(`📋 Updated template:`, templateRow);
     
     res.json({
       success: true,
       message: 'Admin comment and status updated successfully',
-      template: updatedTemplate[1][0]
+      template: templateRow,
+      ...(companyStatusUpdated ? { company_status: companyStatusUpdated } : {})
     });
     
   } catch (error) {

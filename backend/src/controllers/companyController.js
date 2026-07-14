@@ -1,7 +1,12 @@
 const { Company, CompanyValue, CompanyNote, User, Case, CaseField, CompanyTemplate, Notification, CompanyStatus } = require('../models');
 const { sequelize } = require('../config/database');
 const { Op } = require('sequelize');
-const { buildReviewerAssignmentConditions } = require('../utils/reviewAssignment');
+const {
+  buildReviewerAssignmentConditions,
+  getSelectedTemplatesInclude,
+  isDataReviewApprovedStatus,
+  isDataReviewRejectedStatus
+} = require('../utils/reviewAssignment');
 const {
   getTemplateReviewerInclude,
   isTemplateReviewerColumnAvailable
@@ -183,9 +188,16 @@ const getAllCompanies = async (req, res) => {
         if (uniqueRejectedIds.length > 0) {
           const rejectedCondition = { 
             id: { [Op.in]: uniqueRejectedIds }, 
-            status: 'rejected' 
+            status: {
+              [Op.in]:
+                rejection_type === 'template'
+                  ? ['rejected']
+                  : rejection_type === 'data'
+                  ? ['rejected', 'excel_rectification']
+                  : ['rejected', 'excel_rectification']
+            }
           };
-          if (!status || status === 'rejected') {
+          if (!status || status === 'rejected' || status === 'excel_rectification') {
             conditions.push(rejectedCondition);
           }
         }
@@ -230,6 +242,8 @@ const getAllCompanies = async (req, res) => {
     // Apply case_id filter (applies to all conditions)
     if (case_id) whereClause.case_id = parseInt(case_id);
     
+    // Always include selected templates so template-review queue can be classified
+    // from review_status (company.status stays "completed" after data review).
     const companies = await Company.findAll({
       where: whereClause,
       include: [
@@ -248,7 +262,8 @@ const getAllCompanies = async (req, res) => {
           model: Case,
           as: 'case',
           attributes: ['id', 'case_id', 'case_title', 'client_name']
-        }
+        },
+        getSelectedTemplatesInclude(CompanyTemplate)
       ].filter(Boolean),
       order: [['createdAt', 'DESC']]
     });
@@ -777,8 +792,37 @@ const approveCompanyReview = async (req, res) => {
       }]
     });
 
-    if (isAssignedDataReviewer) {
-      await company.update({ status: 'completed' });
+    const companyStatus = normalizeCompanyStatus(company.status);
+
+    // Prefer template approval when this user is the template reviewer and data
+    // review is already done (form_generation / completed). Prevents dual-role
+    // reviewers from taking the data path and skipping template_review_approved.
+    const shouldApproveTemplates =
+      isAssignedTemplateReviewer &&
+      (isDataReviewApprovedStatus(companyStatus) || !isAssignedDataReviewer);
+
+    if (shouldApproveTemplates) {
+      const selectedTemplates = await CompanyTemplate.findAll({
+        where: { company_id: companyId, is_selected: true },
+        attributes: ['id', 'template_name', 'review_status']
+      });
+      const needingImprove = selectedTemplates.filter(
+        (t) => String(t.review_status || '').toLowerCase() === 'need_to_improve'
+      );
+      if (needingImprove.length > 0) {
+        return res.status(400).json({
+          error: `Cannot approve templates: ${needingImprove.length} template(s) marked Need to Improve. Send back for revision instead.`,
+          templates_needing_improvement: needingImprove.map((t) => ({
+            id: t.id,
+            template_name: t.template_name
+          }))
+        });
+      }
+    }
+
+    if (isAssignedDataReviewer && !shouldApproveTemplates) {
+      // Excel/data approved → Form Generation (employee can select templates)
+      await company.update({ status: 'form_generation' });
 
       if (company.created_by) {
         await Notification.create({
@@ -787,20 +831,21 @@ const approveCompanyReview = async (req, res) => {
           case_id: company.case_id,
           type: 'data_review_approved',
           title: 'Data Review Approved',
-          message: `Your company "${company.company_name}" has been approved by ${reviewer.name}. ${companyWithCase.case ? `Case: ${companyWithCase.case.case_title}` : ''}`,
+          message: `Your company "${company.company_name}" Excel/data has been approved by ${reviewer.name}. Status moved to Form Generation. ${companyWithCase.case ? `Case: ${companyWithCase.case.case_title}` : ''}`,
           metadata: {
             reviewer_name: reviewer.name,
             reviewer_email: reviewer.email,
             review_type: 'data_review',
             company_name: company.company_name,
             case_title: companyWithCase.case?.case_title,
-            case_id: companyWithCase.case?.case_id
+            case_id: companyWithCase.case?.case_id,
+            new_status: 'form_generation'
           }
         });
       }
 
       return res.json({
-        message: 'Company approved successfully. Ready for template generation.',
+        message: 'Company approved successfully. Status set to Form Generation.',
         company: company.toJSON(),
         review_type: 'data'
       });
@@ -811,6 +856,9 @@ const approveCompanyReview = async (req, res) => {
       { where: { company_id: companyId, is_selected: true } }
     );
 
+    // All templates approved → Form Printing
+    await company.update({ status: 'form_printing' });
+
     if (company.created_by) {
       await Notification.create({
         user_id: company.created_by,
@@ -818,20 +866,21 @@ const approveCompanyReview = async (req, res) => {
         case_id: company.case_id,
         type: 'template_review_approved',
         title: 'Template Review Approved',
-        message: `Your company "${company.company_name}" templates have been approved by ${reviewer.name}. ${companyWithCase.case ? `Case: ${companyWithCase.case.case_title}` : ''}`,
+        message: `Your company "${company.company_name}" templates have been approved by ${reviewer.name}. Status moved to Form Printing. ${companyWithCase.case ? `Case: ${companyWithCase.case.case_title}` : ''}`,
         metadata: {
           reviewer_name: reviewer.name,
           reviewer_email: reviewer.email,
           review_type: 'template_review',
           company_name: company.company_name,
           case_title: companyWithCase.case?.case_title,
-          case_id: companyWithCase.case?.case_id
+          case_id: companyWithCase.case?.case_id,
+          new_status: 'form_printing'
         }
       });
     }
 
     res.json({
-      message: 'Templates approved successfully.',
+      message: 'Templates approved successfully. Status set to Form Printing.',
       company: company.toJSON(),
       review_type: 'template'
     });
@@ -871,18 +920,16 @@ const rejectCompanyReview = async (req, res) => {
 
     const isAssignedDataReviewer =
       isDataReviewer && Number(company.assigned_to) === Number(reviewerId);
+    const isAssignedTemplateReviewer =
+      isTemplateReviewer &&
+      isTemplateReviewerColumnAvailable() &&
+      Number(company.template_reviewer_id) === Number(reviewerId);
 
-    if (!isAssignedDataReviewer) {
+    if (!isAssignedDataReviewer && !isAssignedTemplateReviewer) {
       return res.status(403).json({
-        error: 'You can only reject companies assigned to you for data review'
+        error: 'You can only reject companies assigned to you for review'
       });
     }
-
-    // Data review rejection: send back to employee without affecting template reviewer
-    await company.update({
-      status: 'rejected',
-      assigned_to: company.created_by
-    });
 
     // Get company with case details for notification
     const companyWithCase = await Company.findByPk(companyId, {
@@ -893,10 +940,75 @@ const rejectCompanyReview = async (req, res) => {
       }]
     });
 
-    // Determine review type and create appropriate notification
-    const reviewType = 'data_review';
-    
-    // Create notification for the employee who created the company
+    // Template review rejection: keep already-approved (done) templates;
+    // mark remaining selected templates as need_to_improve. Do not change
+    // company.data status (usually already completed from data review).
+    const companyStatus = normalizeCompanyStatus(company.status);
+    const shouldRejectTemplates =
+      isAssignedTemplateReviewer &&
+      (isDataReviewApprovedStatus(companyStatus) || !isAssignedDataReviewer);
+
+    if (shouldRejectTemplates) {
+      const updatePayload = {
+        review_status: 'need_to_improve',
+        ...(rejection_reason
+          ? {
+              admin_comment: rejection_reason,
+              admin_remark: rejection_reason
+            }
+          : {})
+      };
+
+      // Keep templates already marked Done; only send the rest back
+      await CompanyTemplate.update(updatePayload, {
+        where: {
+          company_id: companyId,
+          is_selected: true,
+          [Op.or]: [
+            { review_status: null },
+            { review_status: { [Op.ne]: 'done' } }
+          ]
+        }
+      });
+
+      // Template review rejected → Excel Rectification
+      await company.update({ status: 'excel_rectification' });
+
+      if (company.created_by) {
+        await Notification.create({
+          user_id: company.created_by,
+          company_id: companyId,
+          case_id: company.case_id,
+          type: 'template_review_rejected',
+          title: 'Template Review Rejected',
+          message: `Your company "${company.company_name}" templates were sent back by ${reviewer.name}. Status moved to Excel Rectification. ${rejection_reason ? `Reason: ${rejection_reason}` : ''} ${companyWithCase.case ? `Case: ${companyWithCase.case.case_title}` : ''}`,
+          metadata: {
+            reviewer_id: reviewerId,
+            reviewer_name: reviewer.name,
+            reviewer_email: reviewer.email,
+            review_type: 'template_review',
+            rejection_reason: rejection_reason || 'No reason provided',
+            company_name: company.company_name,
+            case_title: companyWithCase.case?.case_title,
+            case_id: companyWithCase.case?.case_id,
+            new_status: 'excel_rectification'
+          }
+        });
+      }
+
+      return res.json({
+        message: 'Templates rejected. Status set to Excel Rectification.',
+        company: company.toJSON(),
+        review_type: 'template'
+      });
+    }
+
+    // Data review rejection: Excel Rectification so employee can fix data
+    await company.update({
+      status: 'excel_rectification',
+      assigned_to: company.created_by
+    });
+
     if (company.created_by) {
       await Notification.create({
         user_id: company.created_by,
@@ -904,23 +1016,25 @@ const rejectCompanyReview = async (req, res) => {
         case_id: company.case_id,
         type: 'data_review_rejected',
         title: 'Data Review Rejected',
-        message: `Your company "${company.company_name}" has been rejected by ${reviewer.name} and sent back for corrections. ${rejection_reason ? `Reason: ${rejection_reason}` : ''} ${companyWithCase.case ? `Case: ${companyWithCase.case.case_title}` : ''}`,
+        message: `Your company "${company.company_name}" Excel/data was rejected by ${reviewer.name}. Status moved to Excel Rectification. ${rejection_reason ? `Reason: ${rejection_reason}` : ''} ${companyWithCase.case ? `Case: ${companyWithCase.case.case_title}` : ''}`,
         metadata: {
-          reviewer_id: reviewerId, // Store reviewer ID to track who rejected
+          reviewer_id: reviewerId,
           reviewer_name: reviewer.name,
           reviewer_email: reviewer.email,
-          review_type: reviewType,
+          review_type: 'data_review',
           rejection_reason: rejection_reason || 'No reason provided',
           company_name: company.company_name,
           case_title: companyWithCase.case?.case_title,
-          case_id: companyWithCase.case?.case_id
+          case_id: companyWithCase.case?.case_id,
+          new_status: 'excel_rectification'
         }
       });
     }
 
     res.json({
-      message: 'Company rejected and sent back to employee for corrections.',
-      company: company.toJSON()
+      message: 'Company rejected. Status set to Excel Rectification.',
+      company: company.toJSON(),
+      review_type: 'data'
     });
   } catch (error) {
     console.error('Error rejecting company:', error);

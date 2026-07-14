@@ -1,6 +1,8 @@
 const { isTemplateReviewerColumnAvailable } = require('./companySchemaFeatures');
 
 const PENDING_REVIEW_STATUSES = ['pending', 'in_progress', 'in_review'];
+const DATA_REVIEW_APPROVED_STATUSES = ['form_generation', 'form_printing', 'completed'];
+const DATA_REVIEW_REJECTED_STATUSES = ['excel_rectification', 'rejected'];
 
 const parseReviewerId = (value) => {
   const parsed = parseInt(value, 10);
@@ -53,12 +55,102 @@ const isTemplateReviewAssignment = (company, userId) => {
   return Number(company.template_reviewer_id) === Number(userId);
 };
 
-const isPendingReviewStatus = (status) => PENDING_REVIEW_STATUSES.includes(status);
+const normalizeCompanyStatus = (status) =>
+  String(status || '').toLowerCase().replace(/[\s-]+/g, '_').trim();
+
+const isPendingReviewStatus = (status) =>
+  PENDING_REVIEW_STATUSES.includes(normalizeCompanyStatus(status));
+
+const isDataReviewApprovedStatus = (status) =>
+  DATA_REVIEW_APPROVED_STATUSES.includes(normalizeCompanyStatus(status));
+
+const isDataReviewRejectedStatus = (status) =>
+  DATA_REVIEW_REJECTED_STATUSES.includes(normalizeCompanyStatus(status));
+
+const getSelectedCompanyTemplates = (company) => {
+  const templates =
+    company?.companyTemplates ||
+    company?.selectedTemplates ||
+    company?.templates ||
+    [];
+  const list = Array.isArray(templates)
+    ? templates
+    : typeof templates?.toJSON === 'function'
+      ? templates.toJSON()
+      : [];
+  const rows = Array.isArray(list) ? list : [];
+  return rows.filter((template) => template?.is_selected !== false);
+};
+
+/**
+ * Template-review phase independent of company.data status.
+ * Modern submit keeps company.status=completed while templates are pending.
+ */
+const getTemplateReviewPhase = (company) => {
+  const hasTemplateReviewer = isTemplateReviewerColumnAvailable()
+    ? company?.template_reviewer_id != null
+    : false;
+  if (!hasTemplateReviewer) return 'none';
+
+  const selected = getSelectedCompanyTemplates(company);
+  if (selected.length > 0) {
+    const statuses = selected.map((t) =>
+      String(t.review_status || '')
+        .toLowerCase()
+        .trim()
+    );
+    if (statuses.every((s) => s === 'done')) return 'approved';
+    if (statuses.some((s) => s === 'need_to_improve')) return 'rejected';
+    return 'in_review';
+  }
+
+  const status = normalizeCompanyStatus(company?.status);
+  if (status === 'rejected') return 'rejected';
+  return 'in_review';
+};
+
+/** Company in Excel / data review queue (excludes template-only assignments). */
+const isExcelReviewQueueCompany = (company) => {
+  const status = normalizeCompanyStatus(company?.status);
+  if (status === 'excel_review') return true;
+  if (status !== 'in_review') return false;
+  if (
+    company?.template_reviewer_id != null &&
+    company?.assigned_to != null &&
+    Number(company.template_reviewer_id) === Number(company.assigned_to)
+  ) {
+    return false;
+  }
+  return true;
+};
+
+/** Company assigned for template review and still awaiting template decision. */
+const isTemplateReviewQueueCompany = (company) =>
+  getTemplateReviewPhase(company) === 'in_review';
+
+/** Sequelize include for selected templates (review queue classification). */
+const getSelectedTemplatesInclude = (CompanyTemplate) => ({
+  model: CompanyTemplate,
+  as: 'companyTemplates',
+  required: false,
+  where: { is_selected: true },
+  attributes: ['id', 'template_name', 'review_status', 'is_selected', 'admin_comment', 'admin_remark']
+});
 
 module.exports = {
   PENDING_REVIEW_STATUSES,
+  DATA_REVIEW_APPROVED_STATUSES,
+  DATA_REVIEW_REJECTED_STATUSES,
   buildReviewerAssignmentConditions,
   isDataReviewAssignment,
   isTemplateReviewAssignment,
-  isPendingReviewStatus
+  isPendingReviewStatus,
+  isDataReviewApprovedStatus,
+  isDataReviewRejectedStatus,
+  normalizeCompanyStatus,
+  isExcelReviewQueueCompany,
+  isTemplateReviewQueueCompany,
+  getTemplateReviewPhase,
+  getSelectedCompanyTemplates,
+  getSelectedTemplatesInclude
 };

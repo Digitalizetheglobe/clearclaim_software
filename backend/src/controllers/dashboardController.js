@@ -1,10 +1,15 @@
-const { Company, Case, User, CompanyStatus } = require('../models');
+const { Company, Case, User, CompanyStatus, CompanyTemplate } = require('../models');
 const { Op } = require('sequelize');
 const {
   isTemplateReviewerColumnAvailable,
   isStatusDeadlineDaysColumnAvailable
 } = require('../utils/companySchemaFeatures');
 const { DEFAULT_STATUSES } = require('../constants/defaultCompanyStatuses');
+const {
+  isExcelReviewQueueCompany,
+  isTemplateReviewQueueCompany,
+  getSelectedTemplatesInclude
+} = require('../utils/reviewAssignment');
 
 const DASHBOARD_FILTERS = {
   active_folios: {
@@ -25,11 +30,23 @@ const DASHBOARD_FILTERS = {
     entity: 'company',
     statuses: ['pending', 'in_review']
   },
+  excel_review: {
+    title: 'Excel Review',
+    description: 'Companies in Excel or data review',
+    entity: 'company',
+    statuses: ['in_review', 'excel_review']
+  },
+  template_review: {
+    title: 'Template Review',
+    description: 'Companies assigned for template review',
+    entity: 'company',
+    statuses: null
+  },
   excel_rectification: {
     title: 'Excel Rectification',
     description: 'Cases that need Excel data corrections',
-    entity: 'case',
-    statuses: ['returned', 'rejected', 'needs_excel_rectification']
+    entity: 'company',
+    statuses: ['excel_rectification', 'returned', 'rejected', 'needs_excel_rectification']
   },
   template_rectification: {
     title: 'Templates Rectification',
@@ -218,8 +235,9 @@ const getDashboardDetails = async (req, res) => {
             model: Case,
             as: 'case',
             attributes: ['id', 'case_id', 'case_title', 'client_name', 'status']
-          }
-        ],
+          },
+          getSelectedTemplatesInclude(CompanyTemplate)
+        ].filter(Boolean),
         order: [['updatedAt', 'DESC']]
       });
 
@@ -227,6 +245,10 @@ const getDashboardDetails = async (req, res) => {
       if (filter === 'pending_attention') {
         const deadlineMap = await buildStatusDeadlineMap();
         items = companies.filter((company) => isCompanySlaBreached(company, deadlineMap));
+      } else if (filter === 'excel_review') {
+        items = companies.filter((company) => isExcelReviewQueueCompany(company));
+      } else if (filter === 'template_review') {
+        items = companies.filter((company) => isTemplateReviewQueueCompany(company));
       }
 
       return res.json({
