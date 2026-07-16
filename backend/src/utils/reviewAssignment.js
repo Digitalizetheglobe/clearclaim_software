@@ -1,8 +1,35 @@
 const { isTemplateReviewerColumnAvailable } = require('./companySchemaFeatures');
 
+/** Legacy preparation / open statuses. */
 const PENDING_REVIEW_STATUSES = ['pending', 'in_progress', 'in_review'];
-const DATA_REVIEW_APPROVED_STATUSES = ['form_generation', 'form_printing', 'completed'];
+
+/**
+ * Excel / data review queue + edit-lock statuses.
+ * `in_review` is kept as a legacy alias of `excel_review`.
+ */
+const EXCEL_DATA_REVIEW_STATUSES = ['excel_review', 'in_review'];
+
+/** After Excel/data approve → Form Generation; after template approve → Form Printing. */
+const DATA_REVIEW_APPROVED_STATUSES = [
+  'form_generation',
+  'digital_forms_review',
+  'form_printing',
+  'completed'
+];
+
+/** After Excel/data or template reject → Excel Rectification (legacy: rejected). */
 const DATA_REVIEW_REJECTED_STATUSES = ['excel_rectification', 'rejected'];
+
+/** Company status while templates are with the template reviewer. */
+const TEMPLATE_FORMS_REVIEW_STATUSES = ['digital_forms_review'];
+
+const COMPANY_WORKFLOW_STATUS = {
+  EXCEL_REVIEW: 'excel_review',
+  EXCEL_RECTIFICATION: 'excel_rectification',
+  FORM_GENERATION: 'form_generation',
+  DIGITAL_FORMS_REVIEW: 'digital_forms_review',
+  FORM_PRINTING: 'form_printing'
+};
 
 const parseReviewerId = (value) => {
   const parsed = parseInt(value, 10);
@@ -61,11 +88,17 @@ const normalizeCompanyStatus = (status) =>
 const isPendingReviewStatus = (status) =>
   PENDING_REVIEW_STATUSES.includes(normalizeCompanyStatus(status));
 
+const isExcelDataReviewStatus = (status) =>
+  EXCEL_DATA_REVIEW_STATUSES.includes(normalizeCompanyStatus(status));
+
 const isDataReviewApprovedStatus = (status) =>
   DATA_REVIEW_APPROVED_STATUSES.includes(normalizeCompanyStatus(status));
 
 const isDataReviewRejectedStatus = (status) =>
   DATA_REVIEW_REJECTED_STATUSES.includes(normalizeCompanyStatus(status));
+
+const isDigitalFormsReviewStatus = (status) =>
+  TEMPLATE_FORMS_REVIEW_STATUSES.includes(normalizeCompanyStatus(status));
 
 const getSelectedCompanyTemplates = (company) => {
   const templates =
@@ -84,7 +117,7 @@ const getSelectedCompanyTemplates = (company) => {
 
 /**
  * Template-review phase independent of company.data status.
- * Modern submit keeps company.status=completed while templates are pending.
+ * Phase values: approved | rejected | in_review | none
  */
 const getTemplateReviewPhase = (company) => {
   const hasTemplateReviewer = isTemplateReviewerColumnAvailable()
@@ -105,15 +138,14 @@ const getTemplateReviewPhase = (company) => {
   }
 
   const status = normalizeCompanyStatus(company?.status);
-  if (status === 'rejected') return 'rejected';
+  if (isDataReviewRejectedStatus(status)) return 'rejected';
+  if (isDigitalFormsReviewStatus(status)) return 'in_review';
   return 'in_review';
 };
 
 /** Company in Excel / data review queue (excludes template-only assignments). */
 const isExcelReviewQueueCompany = (company) => {
-  const status = normalizeCompanyStatus(company?.status);
-  if (status === 'excel_review') return true;
-  if (status !== 'in_review') return false;
+  if (!isExcelDataReviewStatus(company?.status)) return false;
   if (
     company?.template_reviewer_id != null &&
     company?.assigned_to != null &&
@@ -139,14 +171,19 @@ const getSelectedTemplatesInclude = (CompanyTemplate) => ({
 
 module.exports = {
   PENDING_REVIEW_STATUSES,
+  EXCEL_DATA_REVIEW_STATUSES,
   DATA_REVIEW_APPROVED_STATUSES,
   DATA_REVIEW_REJECTED_STATUSES,
+  TEMPLATE_FORMS_REVIEW_STATUSES,
+  COMPANY_WORKFLOW_STATUS,
   buildReviewerAssignmentConditions,
   isDataReviewAssignment,
   isTemplateReviewAssignment,
   isPendingReviewStatus,
+  isExcelDataReviewStatus,
   isDataReviewApprovedStatus,
   isDataReviewRejectedStatus,
+  isDigitalFormsReviewStatus,
   normalizeCompanyStatus,
   isExcelReviewQueueCompany,
   isTemplateReviewQueueCompany,

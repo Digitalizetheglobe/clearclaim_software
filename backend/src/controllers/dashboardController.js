@@ -14,9 +14,9 @@ const {
 const DASHBOARD_FILTERS = {
   active_folios: {
     title: 'Active Folios',
-    description: 'Companies that are active or in progress',
+    description: 'Companies that are not yet completed (any status except completed)',
     entity: 'company',
-    statuses: ['active', 'in_progress']
+    excludeStatuses: ['completed']
   },
   with_authorities: {
     title: 'With Authorities',
@@ -24,17 +24,17 @@ const DASHBOARD_FILTERS = {
     entity: 'company',
     statuses: ['with_authorities', 'authority_review']
   },
-  under_review: {
-    title: 'Under Review',
-    description: 'Companies pending or currently in data review',
-    entity: 'company',
-    statuses: ['pending', 'in_review']
-  },
   excel_review: {
     title: 'Excel Review',
     description: 'Companies in Excel or data review',
     entity: 'company',
-    statuses: ['in_review', 'excel_review']
+    statuses: ['excel_review', 'in_review']
+  },
+  under_review: {
+    title: 'Under Review',
+    description: 'Companies pending or currently in Excel/data review',
+    entity: 'company',
+    statuses: ['pending', 'excel_review', 'in_review']
   },
   template_review: {
     title: 'Template Review',

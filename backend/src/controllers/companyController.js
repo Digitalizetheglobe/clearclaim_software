@@ -5,7 +5,10 @@ const {
   buildReviewerAssignmentConditions,
   getSelectedTemplatesInclude,
   isDataReviewApprovedStatus,
-  isDataReviewRejectedStatus
+  isDataReviewRejectedStatus,
+  isExcelDataReviewStatus,
+  EXCEL_DATA_REVIEW_STATUSES,
+  COMPANY_WORKFLOW_STATUS
 } = require('../utils/reviewAssignment');
 const {
   getTemplateReviewerInclude,
@@ -84,7 +87,7 @@ const pickRoundRobinReviewerId = async (eligibleReviewers) => {
 
   const lastAssignedCompany = await Company.findOne({
     where: {
-      status: 'in_review',
+      status: { [Op.in]: EXCEL_DATA_REVIEW_STATUSES },
       assigned_to: { [Op.in]: eligibleIds }
     },
     order: [['updated_at', 'DESC']],
@@ -445,11 +448,11 @@ const updateCompanyValues = async (req, res) => {
     }
 
     if (
-      normalizeCompanyStatus(company.status) === 'in_review' &&
+      isExcelDataReviewStatus(company.status) &&
       !canEditCompanyInReview(req.user, company)
     ) {
       return res.status(403).json({
-        error: 'Company is locked while under review. Wait for the reviewer to update the status.'
+        error: 'Company is locked while under Excel/data review. Wait for the reviewer to update the status.'
       });
     }
 
@@ -486,12 +489,12 @@ const updateCompanyStatus = async (req, res) => {
     const roles = getUserRoles(req.user);
     const isEmployeeOrSales = roles.includes('employee') || roles.includes('sales');
     if (
-      normalizeCompanyStatus(company.status) === 'in_review' &&
+      isExcelDataReviewStatus(company.status) &&
       isEmployeeOrSales &&
       !canEditCompanyInReview(req.user, company)
     ) {
       return res.status(403).json({
-        error: 'Company status cannot be changed while it is under review.'
+        error: 'Company status cannot be changed while it is under Excel/data review.'
       });
     }
 
@@ -822,7 +825,7 @@ const approveCompanyReview = async (req, res) => {
 
     if (isAssignedDataReviewer && !shouldApproveTemplates) {
       // Excel/data approved → Form Generation (employee can select templates)
-      await company.update({ status: 'form_generation' });
+      await company.update({ status: COMPANY_WORKFLOW_STATUS.FORM_GENERATION });
 
       if (company.created_by) {
         await Notification.create({
@@ -857,7 +860,7 @@ const approveCompanyReview = async (req, res) => {
     );
 
     // All templates approved → Form Printing
-    await company.update({ status: 'form_printing' });
+    await company.update({ status: COMPANY_WORKFLOW_STATUS.FORM_PRINTING });
 
     if (company.created_by) {
       await Notification.create({
@@ -972,7 +975,7 @@ const rejectCompanyReview = async (req, res) => {
       });
 
       // Template review rejected → Excel Rectification
-      await company.update({ status: 'excel_rectification' });
+      await company.update({ status: COMPANY_WORKFLOW_STATUS.EXCEL_RECTIFICATION });
 
       if (company.created_by) {
         await Notification.create({
@@ -1005,7 +1008,7 @@ const rejectCompanyReview = async (req, res) => {
 
     // Data review rejection: Excel Rectification so employee can fix data
     await company.update({
-      status: 'excel_rectification',
+      status: COMPANY_WORKFLOW_STATUS.EXCEL_RECTIFICATION,
       assigned_to: company.created_by
     });
 
@@ -1180,8 +1183,8 @@ const assignForDataReview = async (req, res) => {
       return res.status(404).json({ error: 'Company not found' });
     }
 
-    if (normalizeCompanyStatus(company.status) === 'in_review') {
-      return res.status(400).json({ error: 'Company is already under data review.' });
+    if (isExcelDataReviewStatus(company.status)) {
+      return res.status(400).json({ error: 'Company is already under Excel/data review.' });
     }
 
     const hasData = await companyHasWorkData(companyId);
@@ -1206,7 +1209,7 @@ const assignForDataReview = async (req, res) => {
     await ensureCompanyStatusDefaults();
 
     await company.update({
-      status: 'in_review',
+      status: COMPANY_WORKFLOW_STATUS.EXCEL_REVIEW,
       assigned_to: reviewerId
     });
 
@@ -1307,9 +1310,9 @@ const getReviewerStats = async (req, res) => {
       const status = stat.status;
       const count = parseInt(stat.count);
       
-      if (status === 'in_review') stats.inReview = count;
-      else if (status === 'completed') stats.completed = count;
-      else if (status === 'rejected') stats.rejected = count;
+      if (isExcelDataReviewStatus(status)) stats.inReview += count;
+      else if (isDataReviewApprovedStatus(status)) stats.completed += count;
+      else if (isDataReviewRejectedStatus(status)) stats.rejected += count;
       else if (status === 'pending') stats.pending = count;
       else if (status === 'in_progress') stats.inProgress = count;
     });
@@ -1390,14 +1393,15 @@ const submitForTemplateReview = async (req, res) => {
       return res.status(400).json({ error: 'No templates selected for this company. Please select templates before submitting for review.' });
     }
 
-    // IMPORTANT: Don't overwrite assigned_to if company is already in data review
+    // IMPORTANT: Don't overwrite assigned_to if company is already in Excel/data review
     // Only update assigned_to if company is not currently in data review (legacy schema only)
-    const isInDataReview = company.status === 'in_review' && company.assigned_to !== null;
+    const isInDataReview =
+      isExcelDataReviewStatus(company.status) && company.assigned_to !== null;
     
     if (legacyTemplateReview && isInDataReview) {
       return res.status(409).json({
         error:
-          'This company is already in data review. Parallel template review needs the template_reviewer_id database column — ask an admin to run the RDS migration.'
+          'This company is already in Excel/data review. Parallel template review needs the template_reviewer_id database column — ask an admin to run the RDS migration.'
       });
     }
 
@@ -1406,12 +1410,13 @@ const submitForTemplateReview = async (req, res) => {
     if (legacyTemplateReview) {
       // Legacy: template reviewer tracked via assigned_to when data review is not active
       updateData.assigned_to = reviewerId;
-      if (company.status !== 'in_review') {
-        updateData.status = 'in_review';
+      if (!isExcelDataReviewStatus(company.status)) {
+        updateData.status = COMPANY_WORKFLOW_STATUS.DIGITAL_FORMS_REVIEW;
       }
     } else {
-      // Modern: template review uses template_reviewer_id only — never touch assigned_to or status
+      // Modern: template review uses template_reviewer_id + Digital Forms Review status
       updateData.template_reviewer_id = reviewerId;
+      updateData.status = COMPANY_WORKFLOW_STATUS.DIGITAL_FORMS_REVIEW;
     }
 
     await company.update(updateData);

@@ -4,6 +4,7 @@ const path = require('path');
 const fs = require('fs').promises;
 const Docxtemplater = require('docxtemplater');
 const PizZip = require('pizzip');
+const { COMPANY_WORKFLOW_STATUS } = require('../utils/reviewAssignment');
 
 // Utility function to clean undefined values from any object
 const cleanUndefinedValues = (obj) => {
@@ -2666,17 +2667,17 @@ const updateTemplateComment = async (req, res) => {
 
       if (allDone) {
         await models.Company.update(
-          { status: 'form_printing' },
+          { status: COMPANY_WORKFLOW_STATUS.FORM_PRINTING },
           { where: { id: templateRow.company_id } }
         );
-        companyStatusUpdated = 'form_printing';
+        companyStatusUpdated = COMPANY_WORKFLOW_STATUS.FORM_PRINTING;
       } else if (anyNeedImprove && review_status === 'need_to_improve') {
         // Marking any template Need to Improve → Excel Rectification
         await models.Company.update(
-          { status: 'excel_rectification' },
+          { status: COMPANY_WORKFLOW_STATUS.EXCEL_RECTIFICATION },
           { where: { id: templateRow.company_id } }
         );
-        companyStatusUpdated = 'excel_rectification';
+        companyStatusUpdated = COMPANY_WORKFLOW_STATUS.EXCEL_RECTIFICATION;
       }
     }
     

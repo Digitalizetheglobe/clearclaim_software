@@ -282,7 +282,7 @@ const deleteCase = async (req, res) => {
     console.log(`🗑️ Starting cascading delete for case ${caseId}`);
 
     // Get all companies for this case first
-    const { Company, CompanyValue, CaseValue, Claimant, CompanyTemplate } = require('../models');
+    const { Company, CompanyValue, CaseValue, Claimant, CompanyTemplate, CompanyNote, Notification } = require('../models');
     
     const companies = await Company.findAll({
       where: { case_id: caseId }
@@ -309,9 +309,24 @@ const deleteCase = async (req, res) => {
         where: { company_id: company.id }
       });
 
+      // Delete company notes
+      await CompanyNote.destroy({
+        where: { company_id: company.id }
+      });
+
+      // Delete company-linked notifications
+      await Notification.destroy({
+        where: { company_id: company.id }
+      });
+
       // Delete the company
       await company.destroy();
     }
+
+    // Delete remaining case-level notifications
+    await Notification.destroy({
+      where: { case_id: caseId }
+    });
 
     // Delete case values
     const deletedCaseValues = await CaseValue.destroy({
