@@ -21,7 +21,7 @@ module.exports = (sequelize) => {
     },
     status: {
       type: DataTypes.STRING,
-      defaultValue: 'pending'
+      defaultValue: 'excel_preparation'
     },
     created_by: {
       type: DataTypes.INTEGER,

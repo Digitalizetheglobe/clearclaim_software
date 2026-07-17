@@ -328,12 +328,15 @@ const createCompany = async (req, res) => {
       return res.status(404).json({ error: 'Case not found' });
     }
 
-    // Create the company
+    // Create the company. Start at "Excel Preparation" (first workflow stage)
+    // instead of the legacy generic "pending" so the status is consistent
+    // across environments regardless of company-status master naming.
     const company = await Company.create({
       case_id,
       company_name,
       created_by,
-      assigned_to: assigned_to || null
+      assigned_to: assigned_to || null,
+      status: COMPANY_WORKFLOW_STATUS.EXCEL_PREPARATION
     });
 
     // Fetch the created company with user details
@@ -1121,7 +1124,7 @@ const duplicateCompany = async (req, res) => {
       company_name: company_name.trim(),
       created_by,
       assigned_to: assigned_to ? parseInt(assigned_to) : originalCompany.assigned_to,
-      status: 'pending' // Start with pending status for the duplicate
+      status: COMPANY_WORKFLOW_STATUS.EXCEL_PREPARATION // Start duplicates at Excel Preparation
     });
 
     // Get all company values from the original company

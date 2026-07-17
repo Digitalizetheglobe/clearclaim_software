@@ -24,6 +24,7 @@ const DATA_REVIEW_REJECTED_STATUSES = ['excel_rectification', 'rejected'];
 const TEMPLATE_FORMS_REVIEW_STATUSES = ['digital_forms_review'];
 
 const COMPANY_WORKFLOW_STATUS = {
+  EXCEL_PREPARATION: 'excel_preparation',
   EXCEL_REVIEW: 'excel_review',
   EXCEL_RECTIFICATION: 'excel_rectification',
   FORM_GENERATION: 'form_generation',
