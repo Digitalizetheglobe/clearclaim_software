@@ -62,7 +62,15 @@ const buildReviewerAssignmentConditions = ({
     if (!isTemplateReviewerColumnAvailable()) {
       return [{ assigned_to: templateReviewerId }];
     }
-    return [{ template_reviewer_id: templateReviewerId }];
+    // Prefer template_reviewer_id; also match digital_forms_review rows that only
+    // have assigned_to set (partial / older assigns on prod).
+    return [
+      { template_reviewer_id: templateReviewerId },
+      {
+        assigned_to: templateReviewerId,
+        status: COMPANY_WORKFLOW_STATUS.DIGITAL_FORMS_REVIEW
+      }
+    ];
   }
 
   const conditions = [];
@@ -79,8 +87,21 @@ const isDataReviewAssignment = (company, userId) => {
 };
 
 const isTemplateReviewAssignment = (company, userId) => {
-  if (!company || userId == null || !isTemplateReviewerColumnAvailable()) return false;
-  return Number(company.template_reviewer_id) === Number(userId);
+  if (!company || userId == null) return false;
+  if (isTemplateReviewerColumnAvailable()) {
+    if (Number(company.template_reviewer_id) === Number(userId)) return true;
+    // Partial assign: status moved to Digital Forms Review but reviewer only on assigned_to
+    return (
+      company.template_reviewer_id == null &&
+      isDigitalFormsReviewStatus(company.status) &&
+      Number(company.assigned_to) === Number(userId)
+    );
+  }
+  // Legacy: template reviewer stored in assigned_to while status is Digital Forms Review
+  return (
+    isDigitalFormsReviewStatus(company.status) &&
+    Number(company.assigned_to) === Number(userId)
+  );
 };
 
 const normalizeCompanyStatus = (status) =>
@@ -100,6 +121,63 @@ const isDataReviewRejectedStatus = (status) =>
 
 const isDigitalFormsReviewStatus = (status) =>
   TEMPLATE_FORMS_REVIEW_STATUSES.includes(normalizeCompanyStatus(status));
+
+/**
+ * Resolve template reviewer id for modern (template_reviewer_id) and legacy
+ * (assigned_to while digital_forms_review) schemas.
+ */
+const getEffectiveTemplateReviewerId = (company) => {
+  if (!company) return null;
+  if (isTemplateReviewerColumnAvailable() && company.template_reviewer_id != null) {
+    return Number(company.template_reviewer_id);
+  }
+  if (
+    !isTemplateReviewerColumnAvailable() &&
+    isDigitalFormsReviewStatus(company.status) &&
+    company.assigned_to != null
+  ) {
+    return Number(company.assigned_to);
+  }
+  // Column exists but value missing: still treat digital_forms_review + assigned_to
+  // as a last-resort fallback so prod queues are not empty after partial deploys.
+  if (
+    isDigitalFormsReviewStatus(company.status) &&
+    company.template_reviewer_id == null &&
+    company.assigned_to != null
+  ) {
+    return Number(company.assigned_to);
+  }
+  return null;
+};
+
+/**
+ * Enrich company JSON so clients always see template_reviewer_id / templateReviewer
+ * even on legacy DBs that only store the reviewer in assigned_to.
+ */
+const enrichCompanyTemplateReviewer = (company) => {
+  if (!company) return company;
+  const plain = typeof company.toJSON === 'function' ? company.toJSON() : { ...company };
+  const effectiveId = getEffectiveTemplateReviewerId(plain);
+
+  if (effectiveId != null && plain.template_reviewer_id == null) {
+    plain.template_reviewer_id = effectiveId;
+  }
+
+  if (!plain.templateReviewer && effectiveId != null) {
+    if (
+      plain.assignedUser &&
+      Number(plain.assignedUser.id) === Number(effectiveId)
+    ) {
+      plain.templateReviewer = {
+        id: plain.assignedUser.id,
+        name: plain.assignedUser.name,
+        email: plain.assignedUser.email
+      };
+    }
+  }
+
+  return plain;
+};
 
 const getSelectedCompanyTemplates = (company) => {
   const templates =
@@ -121,10 +199,14 @@ const getSelectedCompanyTemplates = (company) => {
  * Phase values: approved | rejected | in_review | none
  */
 const getTemplateReviewPhase = (company) => {
-  const hasTemplateReviewer = isTemplateReviewerColumnAvailable()
-    ? company?.template_reviewer_id != null
-    : false;
-  if (!hasTemplateReviewer) return 'none';
+  if (!company) return 'none';
+
+  const hasTemplateReviewer = getEffectiveTemplateReviewerId(company) != null;
+  const isDigitalForms = isDigitalFormsReviewStatus(company.status);
+
+  // Digital Forms Review without a resolved reviewer still counts as in_review
+  // so Template Review queues are not empty after assign.
+  if (!hasTemplateReviewer && !isDigitalForms) return 'none';
 
   const selected = getSelectedCompanyTemplates(company);
   if (selected.length > 0) {
@@ -138,10 +220,9 @@ const getTemplateReviewPhase = (company) => {
     return 'in_review';
   }
 
-  const status = normalizeCompanyStatus(company?.status);
-  if (isDataReviewRejectedStatus(status)) return 'rejected';
-  if (isDigitalFormsReviewStatus(status)) return 'in_review';
-  return 'in_review';
+  if (isDataReviewRejectedStatus(company.status)) return 'rejected';
+  if (isDigitalForms) return 'in_review';
+  return hasTemplateReviewer ? 'in_review' : 'none';
 };
 
 /** Company in Excel / data review queue (excludes template-only assignments). */
@@ -190,5 +271,7 @@ module.exports = {
   isTemplateReviewQueueCompany,
   getTemplateReviewPhase,
   getSelectedCompanyTemplates,
-  getSelectedTemplatesInclude
+  getSelectedTemplatesInclude,
+  getEffectiveTemplateReviewerId,
+  enrichCompanyTemplateReviewer
 };

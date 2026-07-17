@@ -8,7 +8,8 @@ const {
   isDataReviewRejectedStatus,
   isExcelDataReviewStatus,
   EXCEL_DATA_REVIEW_STATUSES,
-  COMPANY_WORKFLOW_STATUS
+  COMPANY_WORKFLOW_STATUS,
+  enrichCompanyTemplateReviewer
 } = require('../utils/reviewAssignment');
 const {
   getTemplateReviewerInclude,
@@ -277,7 +278,7 @@ const getAllCompanies = async (req, res) => {
     for (const company of companies) {
       if (!seenIds.has(company.id)) {
         seenIds.add(company.id);
-        uniqueCompanies.push(company);
+        uniqueCompanies.push(enrichCompanyTemplateReviewer(company));
       }
     }
 
@@ -304,12 +305,15 @@ const getCompaniesByCase = async (req, res) => {
           model: User,
           as: 'assignedUser',
           attributes: ['id', 'name', 'email']
-        }
-      ],
+        },
+        getTemplateReviewerInclude(User)
+      ].filter(Boolean),
       order: [['createdAt', 'DESC']]
     });
 
-    res.json({ companies });
+    res.json({
+      companies: companies.map((company) => enrichCompanyTemplateReviewer(company))
+    });
   } catch (error) {
     console.error('Error fetching companies:', error);
     res.status(500).json({ error: 'Failed to fetch companies' });
@@ -385,7 +389,7 @@ const getCompanyDetails = async (req, res) => {
       return res.status(404).json({ error: 'Company not found' });
     }
 
-    res.json({ company });
+    res.json({ company: enrichCompanyTemplateReviewer(company) });
   } catch (error) {
     console.error('Error fetching company details:', error);
     res.status(500).json({ error: 'Failed to fetch company details' });
