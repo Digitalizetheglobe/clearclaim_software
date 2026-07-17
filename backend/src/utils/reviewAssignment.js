@@ -201,13 +201,6 @@ const getSelectedCompanyTemplates = (company) => {
 const getTemplateReviewPhase = (company) => {
   if (!company) return 'none';
 
-  const hasTemplateReviewer = getEffectiveTemplateReviewerId(company) != null;
-  const isDigitalForms = isDigitalFormsReviewStatus(company.status);
-
-  // Digital Forms Review without a resolved reviewer still counts as in_review
-  // so Template Review queues are not empty after assign.
-  if (!hasTemplateReviewer && !isDigitalForms) return 'none';
-
   const selected = getSelectedCompanyTemplates(company);
   if (selected.length > 0) {
     const statuses = selected.map((t) =>
@@ -217,9 +210,17 @@ const getTemplateReviewPhase = (company) => {
     );
     if (statuses.every((s) => s === 'done')) return 'approved';
     if (statuses.some((s) => s === 'need_to_improve')) return 'rejected';
-    return 'in_review';
   }
 
+  const normalizedStatus = normalizeCompanyStatus(company.status);
+  // Final workflow status is authoritative for older production rows where
+  // reviewer metadata or selected-template includes are unavailable.
+  if (normalizedStatus === COMPANY_WORKFLOW_STATUS.FORM_PRINTING) return 'approved';
+
+  const hasTemplateReviewer = getEffectiveTemplateReviewerId(company) != null;
+  const isDigitalForms = isDigitalFormsReviewStatus(normalizedStatus);
+
+  if (selected.length > 0) return 'in_review';
   if (isDataReviewRejectedStatus(company.status)) return 'rejected';
   if (isDigitalForms) return 'in_review';
   return hasTemplateReviewer ? 'in_review' : 'none';
