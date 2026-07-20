@@ -1370,14 +1370,17 @@ const submitForTemplateReview = async (req, res) => {
     }
 
     const reviewerId = parseInt(template_reviewer_id, 10);
+    // Self-review is allowed: submitter with template_reviewer/admin rights can review own templates
+    const isSelfReview = Number(req.user?.id) === reviewerId;
 
-    if (Number(company.created_by) === reviewerId) {
+    if (!isSelfReview && Number(company.created_by) === reviewerId) {
       return res.status(400).json({
         error: 'The employee who created this company cannot be assigned as its template reviewer.'
       });
     }
 
     if (
+      !isSelfReview &&
       !legacyTemplateReview &&
       company.assigned_to != null &&
       Number(company.assigned_to) === reviewerId
