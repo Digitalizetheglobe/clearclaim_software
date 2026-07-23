@@ -5,6 +5,7 @@ const fs = require('fs').promises;
 const Docxtemplater = require('docxtemplater');
 const PizZip = require('pizzip');
 const { COMPANY_WORKFLOW_STATUS } = require('../utils/reviewAssignment');
+const { recordCompanyStatusChange } = require('../utils/companyStatusHistory');
 
 // Utility function to clean undefined values from any object
 const cleanUndefinedValues = (obj) => {
@@ -2665,12 +2666,25 @@ const updateTemplateComment = async (req, res) => {
         selected.length > 0 && statuses.every((s) => s === 'done');
       const anyNeedImprove = statuses.some((s) => s === 'need_to_improve');
 
+      const companyBefore = await models.Company.findByPk(templateRow.company_id, {
+        attributes: ['id', 'status']
+      });
+      const previousCompanyStatus = companyBefore?.status || null;
+
       if (allDone) {
         await models.Company.update(
           { status: COMPANY_WORKFLOW_STATUS.FORM_PRINTING },
           { where: { id: templateRow.company_id } }
         );
         companyStatusUpdated = COMPANY_WORKFLOW_STATUS.FORM_PRINTING;
+        await recordCompanyStatusChange({
+          companyId: templateRow.company_id,
+          fromStatus: previousCompanyStatus,
+          toStatus: COMPANY_WORKFLOW_STATUS.FORM_PRINTING,
+          changedBy: req.user?.id,
+          changeSource: 'template_comment_approve',
+          note: 'All selected templates marked Done'
+        });
       } else if (anyNeedImprove && review_status === 'need_to_improve') {
         // Marking any template Need to Improve → Excel Rectification
         await models.Company.update(
@@ -2678,6 +2692,14 @@ const updateTemplateComment = async (req, res) => {
           { where: { id: templateRow.company_id } }
         );
         companyStatusUpdated = COMPANY_WORKFLOW_STATUS.EXCEL_RECTIFICATION;
+        await recordCompanyStatusChange({
+          companyId: templateRow.company_id,
+          fromStatus: previousCompanyStatus,
+          toStatus: COMPANY_WORKFLOW_STATUS.EXCEL_RECTIFICATION,
+          changedBy: req.user?.id,
+          changeSource: 'template_comment_reject',
+          note: 'Template marked Need to Improve'
+        });
       }
     }
     

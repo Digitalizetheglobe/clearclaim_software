@@ -1,4 +1,4 @@
-const { Company, CompanyValue, CompanyNote, User, Case, CaseField, CompanyTemplate, Notification, CompanyStatus } = require('../models');
+const { Company, CompanyValue, CompanyNote, CompanyStatusHistory, User, Case, CaseField, CompanyTemplate, Notification, CompanyStatus } = require('../models');
 const { sequelize } = require('../config/database');
 const { Op } = require('sequelize');
 const {
@@ -15,6 +15,7 @@ const {
   getTemplateReviewerInclude,
   isTemplateReviewerColumnAvailable
 } = require('../utils/companySchemaFeatures');
+const { recordCompanyStatusChange } = require('../utils/companyStatusHistory');
 
 const DEFAULT_COMPANY_STATUSES = [
   { name: 'Pending', value: 'pending', color: '#f59e0b' },
@@ -25,6 +26,10 @@ const DEFAULT_COMPANY_STATUSES = [
 ];
 
 const ensureCompanyStatusDefaults = async () => {
+  // Only seed on empty table — never recreate statuses an admin deleted
+  const existingCount = await CompanyStatus.count();
+  if (existingCount > 0) return;
+
   for (const status of DEFAULT_COMPANY_STATUSES) {
     await CompanyStatus.findOrCreate({
       where: { value: status.value },
@@ -306,6 +311,11 @@ const getCompaniesByCase = async (req, res) => {
           as: 'assignedUser',
           attributes: ['id', 'name', 'email']
         },
+        {
+          model: User,
+          as: 'createdByUser',
+          attributes: ['id', 'name', 'email']
+        },
         getTemplateReviewerInclude(User)
       ].filter(Boolean),
       order: [['createdAt', 'DESC']]
@@ -341,6 +351,15 @@ const createCompany = async (req, res) => {
       created_by,
       assigned_to: assigned_to || null,
       status: COMPANY_WORKFLOW_STATUS.EXCEL_PREPARATION
+    });
+
+    await recordCompanyStatusChange({
+      companyId: company.id,
+      fromStatus: null,
+      toStatus: COMPANY_WORKFLOW_STATUS.EXCEL_PREPARATION,
+      changedBy: created_by,
+      changeSource: 'create',
+      note: 'Company created — started at Excel Preparation'
     });
 
     // Fetch the created company with user details
@@ -506,6 +525,7 @@ const updateCompanyStatus = async (req, res) => {
     }
 
     const updateData = {};
+    const previousStatus = company.status;
     if (status !== undefined) {
       await ensureCompanyStatusDefaults();
       const normalizedStatus = String(status).trim().toLowerCase();
@@ -526,6 +546,17 @@ const updateCompanyStatus = async (req, res) => {
     }
 
     await company.update(updateData);
+
+    if (updateData.status) {
+      await recordCompanyStatusChange({
+        companyId: company.id,
+        fromStatus: previousStatus,
+        toStatus: updateData.status,
+        changedBy: req.user?.id,
+        changeSource: 'manual',
+        note: 'Status updated from Case Companies'
+      });
+    }
 
     // Fetch updated company with user details
     const updatedCompany = await Company.findByPk(companyId, {
@@ -816,8 +847,22 @@ const approveCompanyReview = async (req, res) => {
         where: { company_id: companyId, is_selected: true },
         attributes: ['id', 'template_name', 'review_status']
       });
+      const normalize = (s) => String(s || '').toLowerCase().trim();
+      const pending = selectedTemplates.filter((t) => {
+        const status = normalize(t.review_status);
+        return status !== 'done' && status !== 'need_to_improve';
+      });
+      if (pending.length > 0) {
+        return res.status(400).json({
+          error: `Cannot approve: ${pending.length} template(s) still Pending Review. Review all templates first.`,
+          templates_pending_review: pending.map((t) => ({
+            id: t.id,
+            template_name: t.template_name
+          }))
+        });
+      }
       const needingImprove = selectedTemplates.filter(
-        (t) => String(t.review_status || '').toLowerCase() === 'need_to_improve'
+        (t) => normalize(t.review_status) === 'need_to_improve'
       );
       if (needingImprove.length > 0) {
         return res.status(400).json({
@@ -828,11 +873,26 @@ const approveCompanyReview = async (req, res) => {
           }))
         });
       }
+      const notDone = selectedTemplates.filter((t) => normalize(t.review_status) !== 'done');
+      if (selectedTemplates.length === 0 || notDone.length > 0) {
+        return res.status(400).json({
+          error: 'Cannot approve until every selected template is marked Done.'
+        });
+      }
     }
 
     if (isAssignedDataReviewer && !shouldApproveTemplates) {
       // Excel/data approved → Form Generation (employee can select templates)
+      const previousStatus = company.status;
       await company.update({ status: COMPANY_WORKFLOW_STATUS.FORM_GENERATION });
+      await recordCompanyStatusChange({
+        companyId: company.id,
+        fromStatus: previousStatus,
+        toStatus: COMPANY_WORKFLOW_STATUS.FORM_GENERATION,
+        changedBy: req.user?.id,
+        changeSource: 'data_approve',
+        note: 'Data review approved'
+      });
 
       if (company.created_by) {
         await Notification.create({
@@ -867,7 +927,16 @@ const approveCompanyReview = async (req, res) => {
     );
 
     // All templates approved → Form Printing
+    const previousStatus = company.status;
     await company.update({ status: COMPANY_WORKFLOW_STATUS.FORM_PRINTING });
+    await recordCompanyStatusChange({
+      companyId: company.id,
+      fromStatus: previousStatus,
+      toStatus: COMPANY_WORKFLOW_STATUS.FORM_PRINTING,
+      changedBy: req.user?.id,
+      changeSource: 'template_approve',
+      note: 'All templates approved'
+    });
 
     if (company.created_by) {
       await Notification.create({
@@ -959,6 +1028,34 @@ const rejectCompanyReview = async (req, res) => {
       (isDataReviewApprovedStatus(companyStatus) || !isAssignedDataReviewer);
 
     if (shouldRejectTemplates) {
+      const selectedForReject = await CompanyTemplate.findAll({
+        where: { company_id: companyId, is_selected: true },
+        attributes: ['id', 'template_name', 'review_status']
+      });
+      const normalizeRejectStatus = (s) => String(s || '').toLowerCase().trim();
+      const pendingForReject = selectedForReject.filter((t) => {
+        const status = normalizeRejectStatus(t.review_status);
+        return status !== 'done' && status !== 'need_to_improve';
+      });
+      if (pendingForReject.length > 0) {
+        return res.status(400).json({
+          error: `Cannot send back: ${pendingForReject.length} template(s) still Pending Review. Review all templates first.`,
+          templates_pending_review: pendingForReject.map((t) => ({
+            id: t.id,
+            template_name: t.template_name
+          }))
+        });
+      }
+      const needingImproveForReject = selectedForReject.filter(
+        (t) => normalizeRejectStatus(t.review_status) === 'need_to_improve'
+      );
+      if (needingImproveForReject.length === 0) {
+        return res.status(400).json({
+          error:
+            'Cannot send back: mark at least one template as Need to Improve before sending back for revision.'
+        });
+      }
+
       const updatePayload = {
         review_status: 'need_to_improve',
         ...(rejection_reason
@@ -982,7 +1079,16 @@ const rejectCompanyReview = async (req, res) => {
       });
 
       // Template review rejected → Excel Rectification
+      const previousTemplateRejectStatus = company.status;
       await company.update({ status: COMPANY_WORKFLOW_STATUS.EXCEL_RECTIFICATION });
+      await recordCompanyStatusChange({
+        companyId: company.id,
+        fromStatus: previousTemplateRejectStatus,
+        toStatus: COMPANY_WORKFLOW_STATUS.EXCEL_RECTIFICATION,
+        changedBy: req.user?.id,
+        changeSource: 'template_reject',
+        note: 'Template review rejected'
+      });
 
       if (company.created_by) {
         await Notification.create({
@@ -1014,9 +1120,18 @@ const rejectCompanyReview = async (req, res) => {
     }
 
     // Data review rejection: Excel Rectification so employee can fix data
+    const previousDataRejectStatus = company.status;
     await company.update({
       status: COMPANY_WORKFLOW_STATUS.EXCEL_RECTIFICATION,
       assigned_to: company.created_by
+    });
+    await recordCompanyStatusChange({
+      companyId: company.id,
+      fromStatus: previousDataRejectStatus,
+      toStatus: COMPANY_WORKFLOW_STATUS.EXCEL_RECTIFICATION,
+      changedBy: req.user?.id,
+      changeSource: 'data_reject',
+      note: 'Data review rejected'
     });
 
     if (company.created_by) {
@@ -1131,6 +1246,15 @@ const duplicateCompany = async (req, res) => {
       status: COMPANY_WORKFLOW_STATUS.EXCEL_PREPARATION // Start duplicates at Excel Preparation
     });
 
+    await recordCompanyStatusChange({
+      companyId: newCompany.id,
+      fromStatus: null,
+      toStatus: COMPANY_WORKFLOW_STATUS.EXCEL_PREPARATION,
+      changedBy: created_by,
+      changeSource: 'duplicate',
+      note: `Duplicated from company #${companyId} — started at Excel Preparation`
+    });
+
     // Get all company values from the original company
     const originalValues = await CompanyValue.findAll({
       where: { company_id: companyId }
@@ -1215,9 +1339,18 @@ const assignForDataReview = async (req, res) => {
 
     await ensureCompanyStatusDefaults();
 
+    const previousAssignStatus = company.status;
     await company.update({
       status: COMPANY_WORKFLOW_STATUS.EXCEL_REVIEW,
       assigned_to: reviewerId
+    });
+    await recordCompanyStatusChange({
+      companyId: company.id,
+      fromStatus: previousAssignStatus,
+      toStatus: COMPANY_WORKFLOW_STATUS.EXCEL_REVIEW,
+      changedBy: req.user?.id,
+      changeSource: 'assign_data_review',
+      note: `Assigned to data reviewer #${reviewerId}`
     });
 
     try {
@@ -1416,6 +1549,7 @@ const submitForTemplateReview = async (req, res) => {
     }
 
     const updateData = {};
+    const previousSubmitStatus = company.status;
 
     if (legacyTemplateReview) {
       // Legacy: template reviewer tracked via assigned_to when data review is not active
@@ -1430,6 +1564,17 @@ const submitForTemplateReview = async (req, res) => {
     }
 
     await company.update(updateData);
+
+    if (updateData.status) {
+      await recordCompanyStatusChange({
+        companyId: company.id,
+        fromStatus: previousSubmitStatus,
+        toStatus: updateData.status,
+        changedBy: req.user?.id,
+        changeSource: 'template_submit',
+        note: `Submitted for template review to reviewer #${reviewerId}`
+      });
+    }
 
     // Mark all selected templates as pending template review
     await CompanyTemplate.update(
@@ -1555,6 +1700,102 @@ const addCompanyNote = async (req, res) => {
   }
 };
 
+/**
+ * Status history for a company — how many statuses passed from Excel Preparation.
+ */
+const getCompanyStatusHistory = async (req, res) => {
+  try {
+    const { companyId } = req.params;
+
+    const company = await Company.findByPk(companyId, {
+      attributes: ['id', 'company_name', 'status', 'case_id']
+    });
+    if (!company) {
+      return res.status(404).json({ error: 'Company not found' });
+    }
+
+    let history = await CompanyStatusHistory.findAll({
+      where: { company_id: companyId },
+      include: [
+        {
+          model: User,
+          as: 'changedByUser',
+          attributes: ['id', 'name', 'email'],
+          required: false
+        }
+      ],
+      order: [['createdAt', 'ASC'], ['id', 'ASC']]
+    });
+
+    // Seed a baseline row for older companies that predate history logging
+    if (history.length === 0 && company.status) {
+      const seeded = await recordCompanyStatusChange({
+        companyId: company.id,
+        fromStatus: null,
+        toStatus: company.status,
+        changedBy: req.user?.id || null,
+        changeSource: 'backfill',
+        note: 'Baseline status recorded when history was first viewed'
+      });
+      if (seeded) {
+        history = await CompanyStatusHistory.findAll({
+          where: { company_id: companyId },
+          include: [
+            {
+              model: User,
+              as: 'changedByUser',
+              attributes: ['id', 'name', 'email'],
+              required: false
+            }
+          ],
+          order: [['createdAt', 'ASC'], ['id', 'ASC']]
+        });
+      }
+    }
+
+    const normalize = (s) => String(s || '').trim().toLowerCase();
+    const excelPrep = COMPANY_WORKFLOW_STATUS.EXCEL_PREPARATION;
+
+    // Index of first Excel Preparation entry (create / start / return)
+    let excelPrepStartIndex = history.findIndex(
+      (h) => normalize(h.to_status) === excelPrep || normalize(h.from_status) === excelPrep
+    );
+    if (excelPrepStartIndex < 0) excelPrepStartIndex = 0;
+
+    const fromExcelPrep = history.slice(excelPrepStartIndex);
+    // Status passes = transitions after the starting Excel Preparation row
+    const statusPasses = fromExcelPrep.filter((h) => {
+      const from = normalize(h.from_status);
+      const to = normalize(h.to_status);
+      return from && from !== to;
+    });
+
+    // Times workflow left Excel Preparation
+    const leftExcelPreparationCount = history.filter(
+      (h) => normalize(h.from_status) === excelPrep && normalize(h.to_status) !== excelPrep
+    ).length;
+
+    res.json({
+      company: {
+        id: company.id,
+        company_name: company.company_name,
+        status: company.status,
+        case_id: company.case_id
+      },
+      history,
+      summary: {
+        total_changes: history.length,
+        status_passes_from_excel_preparation: statusPasses.length,
+        left_excel_preparation_count: leftExcelPreparationCount,
+        current_status: company.status
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching company status history:', error);
+    res.status(500).json({ error: 'Failed to fetch company status history' });
+  }
+};
+
 module.exports = {
   getAllCompanies,
   getCompaniesByCase,
@@ -1574,5 +1815,6 @@ module.exports = {
   submitForTemplateReview,
   assignForDataReview,
   getCompanyNotes,
-  addCompanyNote
+  addCompanyNote,
+  getCompanyStatusHistory
 };

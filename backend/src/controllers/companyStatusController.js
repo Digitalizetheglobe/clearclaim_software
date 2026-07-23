@@ -42,7 +42,14 @@ const enrichStatuses = (statuses) => {
   });
 };
 
+/**
+ * Seed default statuses only when the table is empty (first install).
+ * Do NOT re-create on every list/fetch — that undoes admin deletes.
+ */
 const ensureDefaults = async () => {
+  const existingCount = await CompanyStatus.count();
+  if (existingCount > 0) return;
+
   for (const status of DEFAULT_STATUSES) {
     await CompanyStatus.findOrCreate({
       where: { value: status.value },
@@ -262,9 +269,14 @@ const deleteCompanyStatus = async (req, res) => {
       });
     }
 
+    const deletedValue = status.value;
+    const deletedName = status.name;
     await status.destroy();
 
-    res.json({ message: 'Company status deleted successfully' });
+    res.json({
+      message: 'Company status deleted successfully',
+      deleted: { value: deletedValue, name: deletedName }
+    });
   } catch (error) {
     console.error('Error deleting company status:', error);
     res.status(500).json({ error: 'Failed to delete company status' });

@@ -20,7 +20,8 @@ const {
   submitForTemplateReview,
   assignForDataReview,
   getCompanyNotes,
-  addCompanyNote
+  addCompanyNote,
+  getCompanyStatusHistory
 } = require('../controllers/companyController');
 
 const { deleteCase } = require('../controllers/caseController');
@@ -87,5 +88,8 @@ router.post('/:companyId/duplicate', duplicateCompany);
 // Company notes
 router.get('/:companyId/notes', getCompanyNotes);
 router.post('/:companyId/notes', addCompanyNote);
+
+// Company status history (passes from Excel Preparation)
+router.get('/:companyId/status-history', getCompanyStatusHistory);
 
 module.exports = router;
