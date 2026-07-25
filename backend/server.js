@@ -93,7 +93,10 @@ async function startServer() {
         await models.ShareRecovery.sync();
         await models.Iepf.sync();
         await models.Contact.sync();
-        console.log('Inquiries, ShareRecovery, IEPF and Contact tables ready');
+        // Notes / status history were added after local-only sync — ensure on prod too
+        if (models.CompanyNote) await models.CompanyNote.sync();
+        if (models.CompanyStatusHistory) await models.CompanyStatusHistory.sync();
+        console.log('Inquiries, ShareRecovery, IEPF, Contact, CompanyNote and StatusHistory tables ready');
       } catch (syncError) {
         console.error('Tables sync failed:', syncError.message);
       }

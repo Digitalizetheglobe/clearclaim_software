@@ -32,7 +32,8 @@ module.exports = (sequelize) => {
     },
     {
       tableName: 'company_notes',
-      timestamps: true
+      timestamps: true,
+      underscored: true
     }
   );
 

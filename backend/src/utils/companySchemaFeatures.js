@@ -1,4 +1,8 @@
 const { ensureCompanySchema } = require('./ensureCompanySchema');
+const {
+  ensureCompanyNotesSchema,
+  ensureCompanyStatusHistorySchema
+} = require('./ensureCompanyNotesSchema');
 
 let templateReviewerColumnAvailable = false;
 let statusDeadlineDaysColumnAvailable = false;
@@ -56,6 +60,36 @@ async function initializeCompanySchemaFeatures(sequelize, models) {
   }
 
   await ensureCompanyStatusSchema(sequelize);
+
+  try {
+    await ensureCompanyNotesSchema(sequelize);
+    console.log('Company notes schema verified (company_notes)');
+  } catch (error) {
+    const message = error?.message || '';
+    if (message.includes('must be owner')) {
+      console.warn(
+        'Cannot auto-create company_notes (DB user lacks ownership). ' +
+          'Run migrate-add-company-notes-table.js as the RDS master user.'
+      );
+    } else {
+      console.warn('Company notes schema migration skipped:', message);
+    }
+  }
+
+  try {
+    await ensureCompanyStatusHistorySchema(sequelize);
+    console.log('Company status history schema verified (company_status_history)');
+  } catch (error) {
+    const message = error?.message || '';
+    if (message.includes('must be owner')) {
+      console.warn(
+        'Cannot auto-create company_status_history (DB user lacks ownership). ' +
+          'Run migrate-add-company-notes-table.js as the RDS master user.'
+      );
+    } else {
+      console.warn('Company status history schema migration skipped:', message);
+    }
+  }
 
   templateReviewerColumnAvailable = await columnExists(sequelize, 'companies', 'template_reviewer_id');
   statusDeadlineDaysColumnAvailable = await columnExists(

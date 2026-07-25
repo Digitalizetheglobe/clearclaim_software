@@ -1655,7 +1655,20 @@ const getCompanyNotes = async (req, res) => {
     res.json({ notes });
   } catch (error) {
     console.error('Error fetching company notes:', error);
-    res.status(500).json({ error: 'Failed to fetch company notes' });
+    const missingTable =
+      error?.original?.code === '42P01' ||
+      /relation .*company_notes.* does not exist/i.test(String(error?.message || ''));
+    res.status(500).json({
+      error: 'Failed to fetch company notes',
+      ...(missingTable
+        ? {
+            details:
+              'company_notes table is missing on this database. Deploy latest backend or run migrate-add-company-notes-table.js'
+          }
+        : process.env.NODE_ENV !== 'production'
+          ? { details: error.message }
+          : {})
+    });
   }
 };
 
@@ -1696,7 +1709,20 @@ const addCompanyNote = async (req, res) => {
     });
   } catch (error) {
     console.error('Error adding company note:', error);
-    res.status(500).json({ error: 'Failed to add company note' });
+    const missingTable =
+      error?.original?.code === '42P01' ||
+      /relation .*company_notes.* does not exist/i.test(String(error?.message || ''));
+    res.status(500).json({
+      error: 'Failed to add company note',
+      ...(missingTable
+        ? {
+            details:
+              'company_notes table is missing on this database. Deploy latest backend or run migrate-add-company-notes-table.js'
+          }
+        : process.env.NODE_ENV !== 'production'
+          ? { details: error.message }
+          : {})
+    });
   }
 };
 

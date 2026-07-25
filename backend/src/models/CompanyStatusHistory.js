@@ -46,7 +46,8 @@ module.exports = (sequelize) => {
     {
       tableName: 'company_status_history',
       timestamps: true,
-      updatedAt: false
+      updatedAt: false,
+      underscored: true
     }
   );
 

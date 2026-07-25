@@ -15,6 +15,12 @@ if (process.env.DATABASE_URL) {
       acquire: 30000,
       idle: 10000
     },
+    // Keep column naming consistent with local DB_* config and SQL migrations
+    define: {
+      timestamps: true,
+      underscored: true,
+      freezeTableName: true
+    },
     dialectOptions: process.env.DB_SSL === 'true' || process.env.DATABASE_URL.includes('sslmode=require') ? {
       ssl: {
         require: true,
