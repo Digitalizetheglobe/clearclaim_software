@@ -3,6 +3,7 @@ const fs = require('fs').promises;
 const path = require('path');
 const Docxtemplater = require('docxtemplater');
 const PizZip = require('pizzip');
+const { postProcessDocxZip } = require('../utils/templateDocumentUtils');
 
 // Get all available templates
 const getAllTemplates = async (req, res) => {
@@ -818,35 +819,14 @@ const downloadPopulatedTemplate = async (req, res) => {
       // Generate the populated document buffer
       let buffer = doc.getZip().generate({ type: 'nodebuffer' });
 
-      // LAST RESORT: Check if the generated document still contains "undefined" text
-      // This is a post-processing step to catch any remaining undefined values
+      // LAST RESORT: Post-process document for formatting cleanup and blank rows
       try {
-        const zip = new PizZip(buffer);
-        const documentXml = zip.files["word/document.xml"];
-        
-        if (documentXml) {
-          let content = documentXml.asText();
-          const originalContent = content;
-          
-          // Replace any remaining "undefined" text with empty string
-          content = content.replace(/undefined/g, '');
-          
-          if (content !== originalContent) {
-            console.log('🚨 POST-PROCESSING: Found and removed "undefined" text from generated document');
-            
-            // Update the document.xml content
-            zip.file("word/document.xml", content);
-            
-            // Regenerate the buffer with cleaned content
-            buffer = zip.generate({ type: 'nodebuffer' });
-            console.log('✅ Document post-processed and cleaned');
-          } else {
-            console.log('✅ No "undefined" text found in generated document');
-          }
-        }
+        const postZip = new PizZip(buffer);
+        postProcessDocxZip(postZip);
+        buffer = postZip.generate({ type: 'nodebuffer' });
+        console.log('✅ Document post-processed: cleaned &&, commas, and empty table rows');
       } catch (postProcessError) {
         console.error('Warning: Post-processing failed, using original buffer:', postProcessError.message);
-        // Continue with original buffer if post-processing fails
       }
 
       // Set response headers for file download

@@ -6,6 +6,7 @@ const Docxtemplater = require('docxtemplater');
 const PizZip = require('pizzip');
 const { COMPANY_WORKFLOW_STATUS } = require('../utils/reviewAssignment');
 const { recordCompanyStatusChange } = require('../utils/companyStatusHistory');
+const { postProcessDocxZip, cleanFormattedListText } = require('../utils/templateDocumentUtils');
 
 // Utility function to clean undefined values from any object
 const cleanUndefinedValues = (obj) => {
@@ -152,11 +153,13 @@ const getValueOrPlaceholder = (value, fieldName) => {
   // Remove trailing commas, "&", dots, etc. from all values
   cleanedValue = cleanedValue.replace(/[,.\s]*&[\s,]*$/g, ''); // Remove trailing "&" with any surrounding commas/spaces
   cleanedValue = cleanedValue.replace(/[,.\s]*&amp;[\s,]*$/g, ''); // Remove trailing "&amp;"
+  cleanedValue = cleanedValue.replace(/\s*&\s*&\s*/g, ' '); // Remove "&&" and "& &"
   cleanedValue = cleanedValue.replace(/[,.\s]+$/g, ''); // Remove trailing commas, dots, and spaces
-  cleanedValue = cleanedValue.replace(/^[\s,]+/g, ''); // Remove leading commas and spaces
+  cleanedValue = cleanedValue.replace(/^[\s,;&]+/g, ''); // Remove leading commas and spaces
   cleanedValue = cleanedValue.replace(/,{2,}/g, ','); // Remove multiple consecutive commas
   cleanedValue = cleanedValue.replace(/,\s*&/g, ''); // Remove ", &"
   cleanedValue = cleanedValue.replace(/\.\s*&/g, ''); // Remove ". &"
+  cleanedValue = cleanFormattedListText(cleanedValue);
   cleanedValue = cleanedValue.trim();
   
   if (cleanedValue === '' || 
@@ -731,6 +734,10 @@ const mapCompanyValuesToTemplate = async (companyId, templatePath) => {
           if (!valueMap['Company Name']) valueMap['Company Name'] = cv.field_value;
           if (!valueMap['company_name']) valueMap['company_name'] = cv.field_value;
         }
+        if (key === 'company address') {
+          if (!valueMap['Company Address']) valueMap['Company Address'] = cv.field_value;
+          if (!valueMap['company_address']) valueMap['company_address'] = cv.field_value;
+        }
         if (key === 'folio no') {
           if (!valueMap['Folio No']) valueMap['Folio No'] = cv.field_value;
           if (!valueMap['folio_no']) valueMap['folio_no'] = cv.field_value;
@@ -738,6 +745,35 @@ const mapCompanyValuesToTemplate = async (companyId, templatePath) => {
         if (key === 'total shares') {
           if (!valueMap['Total Shares']) valueMap['Total Shares'] = cv.field_value;
           if (!valueMap['total_shares']) valueMap['total_shares'] = cv.field_value;
+        }
+        if (key === 'rta name') {
+          if (!valueMap['RTA Name']) valueMap['RTA Name'] = cv.field_value;
+          if (!valueMap['rta_name']) valueMap['rta_name'] = cv.field_value;
+        }
+        if (key === 'total dividend amount') {
+          if (!valueMap['Total Dividend Amount']) valueMap['Total Dividend Amount'] = cv.field_value;
+          if (!valueMap['total_dividend_amount']) valueMap['total_dividend_amount'] = cv.field_value;
+        }
+        if (key === 'financial dividend year') {
+          if (!valueMap['Financial Dividend Year']) valueMap['Financial Dividend Year'] = cv.field_value;
+          if (!valueMap['financial_dividend_year']) valueMap['financial_dividend_year'] = cv.field_value;
+        }
+        if (key === 'iepf dividends details') {
+          if (!valueMap['IEPF Dividends Details']) valueMap['IEPF Dividends Details'] = cv.field_value;
+          if (!valueMap['iepf_dividends_details']) valueMap['iepf_dividends_details'] = cv.field_value;
+        }
+        // Legal heir relation fields
+        if ((key.includes('relation lh') || label.includes('relation lh')) && key.match(/lh\d+/i)) {
+          const lhMatch = key.match(/lh(\d+)/i) || label.match(/lh(\d+)/i);
+          if (lhMatch) {
+            const lhNum = lhMatch[1];
+            const relationKey = `Relation LH${lhNum}`;
+            if (!valueMap[relationKey]) valueMap[relationKey] = cv.field_value;
+            if (!valueMap[`Relation with Deceased Person LH${lhNum}`]) valueMap[`Relation with Deceased Person LH${lhNum}`] = cv.field_value;
+            if (!valueMap[`Relation with Deceased LH${lhNum}`]) valueMap[`Relation with Deceased LH${lhNum}`] = cv.field_value;
+            if (!valueMap[`Claimant Relation LH${lhNum}`]) valueMap[`Claimant Relation LH${lhNum}`] = cv.field_value;
+            if (!valueMap[`relation_lh${lhNum}`]) valueMap[`relation_lh${lhNum}`] = cv.field_value;
+          }
         }
         // Handle Date of Issue field
         if (key === 'date of issue' || key === 'date_of_issue' || key.includes('date of issue')) {
@@ -775,7 +811,14 @@ const mapCompanyValuesToTemplate = async (companyId, templatePath) => {
       // Date of Issue should ONLY come from database, not current date
       'Date of Issue': getValueOrPlaceholder(valueMap['date_of_issue'] || valueMap['Date of Issue'], 'Date of Issue'),
       'Current Date': formatDate(new Date()),
-      'Today Date': formatDate(new Date())
+      'Today Date': formatDate(new Date()),
+      'RTA Name': getValueOrPlaceholder(valueMap['rta_name'] || valueMap['RTA Name'], 'RTA Name'),
+      'Total Dividend Amount': getValueOrPlaceholder(valueMap['total_dividend_amount'] || valueMap['Total Dividend Amount'], 'Total Dividend Amount'),
+      'Financial Dividend Year': getValueOrPlaceholder(valueMap['financial_dividend_year'] || valueMap['Financial Dividend Year'], 'Financial Dividend Year'),
+      'IEPF Dividends Details': getValueOrPlaceholder(valueMap['iepf_dividends_details'] || valueMap['IEPF Dividends Details'], 'IEPF Dividends Details'),
+      'Company Address': getValueOrPlaceholder(valueMap['company_address'] || valueMap['Company Address'], 'Company Address'),
+      'Occupation C1': getValueOrPlaceholder(valueMap['occupation_c1'] || valueMap['Occupation C1'], 'Occupation C1'),
+      'PIN Code': getValueOrPlaceholder(valueMap['pin_c1'] || valueMap['PIN C1'] || valueMap['PIN Code'], 'PIN Code'),
     };
 
     // Dynamically add mappings for all joint holders (C1, C2, C3, C4, C5, etc.)
@@ -966,6 +1009,10 @@ const mapCompanyValuesToTemplate = async (companyId, templatePath) => {
         valueMap[`relation_c${num}`] || valueMap[`Deceased Relation ${cnSuffix}`], 
         `Deceased Relation ${cnSuffix}`
       );
+      templateMappings[`Relation with Deceased ${cnSuffix}`] = getValueOrPlaceholder(
+        valueMap[`relation_c${num}`] || valueMap[`Deceased Relation ${cnSuffix}`] || valueMap[`Relation with Deceased ${cnSuffix}`],
+        `Relation with Deceased ${cnSuffix}`
+      );
       // CRITICAL FIX: Ensure Address C1 maps to claimant address, not bank address
       // First, try to find the correct claimant address
       const claimantAddress = valueMap[`address_c${num}`] || 
@@ -1023,6 +1070,14 @@ const mapCompanyValuesToTemplate = async (companyId, templatePath) => {
           finalPin, 
           `PIN ${cnSuffix}`
         );
+      }
+      // Combined address + PIN for templates that need both in one field
+      const addressParts = [templateMappings[`Address ${cnSuffix}`], templateMappings[`PIN ${cnSuffix}`]]
+        .filter((v) => v && v.trim() !== '');
+      if (addressParts.length > 0) {
+        const combinedAddress = addressParts.join(', ');
+        templateMappings[`Address with PIN ${cnSuffix}`] = combinedAddress;
+        valueMap[`Address with PIN ${cnSuffix}`] = combinedAddress;
       }
       templateMappings[`Old Address ${cnSuffix}`] = getValueOrPlaceholder(
         valueMap[`old_address_c${num}`] || valueMap[`Old Address ${cnSuffix}`], 
@@ -1124,13 +1179,6 @@ const mapCompanyValuesToTemplate = async (companyId, templatePath) => {
         if (certNameField) {
           certName = certNameField.value;
           console.log(`✅ Found Certificate name from field "${certNameField.key}": ${certNameField.value}`);
-        } else {
-          // Fallback to any name field
-          const anyName = availableHNames.find(n => n.value && n.value.trim() !== '');
-          if (anyName) {
-            certName = anyName.value;
-            console.log(`✅ Using fallback name for Certificate H${num} from field "${anyName.key}": ${anyName.value}`);
-          }
         }
       }
       
@@ -1161,13 +1209,6 @@ const mapCompanyValuesToTemplate = async (companyId, templatePath) => {
         if (dcNameField) {
           dcName = dcNameField.value;
           console.log(`✅ Found DC name from field "${dcNameField.key}": ${dcNameField.value}`);
-        } else {
-          // Fallback to any name field
-          const anyName = availableHNames.find(n => n.value && n.value.trim() !== '');
-          if (anyName) {
-            dcName = anyName.value;
-            console.log(`✅ Using fallback name for DC H${num} from field "${anyName.key}": ${anyName.value}`);
-          }
         }
       }
       
@@ -1215,6 +1256,179 @@ const mapCompanyValuesToTemplate = async (companyId, templatePath) => {
         `Deceased Place ${hnSuffix}`
       );
     });
+
+    // Combined deceased holder name(s) for Annexure-D — avoids ", , ," when H1–H4 are empty
+    const deceasedDcNames = [];
+    for (let h = 1; h <= 4; h++) {
+      const dcVal =
+        templateMappings[`Name as per DC H${h}`] ||
+        valueMap[`Name as per DC H${h}`] ||
+        valueMap[`name_dc_h${h}`];
+      if (dcVal && String(dcVal).trim()) {
+        deceasedDcNames.push(String(dcVal).trim());
+      }
+    }
+    if (deceasedDcNames.length === 0) {
+      for (let h = 1; h <= 4; h++) {
+        const certVal =
+          templateMappings[`Name as per Certificate H${h}`] ||
+          valueMap[`Name as per Certificate H${h}`] ||
+          valueMap[`name_cert_h${h}`];
+        if (certVal && String(certVal).trim()) {
+          deceasedDcNames.push(String(certVal).trim());
+        }
+      }
+    }
+    const deceasedNamesJoined = cleanCommaSeparatedList(deceasedDcNames.join(', '));
+    templateMappings['Deceased Names DC'] = deceasedNamesJoined;
+    templateMappings['Deceased Name DC'] = deceasedNamesJoined;
+    // Form-B NDEL: "Late Name1, Name2" or empty when no deceased DC names
+    templateMappings['Deceased Names Late'] = deceasedNamesJoined
+      ? `Late ${deceasedNamesJoined}`
+      : '';
+    templateMappings['Deceased Name Late'] = templateMappings['Deceased Names Late'];
+
+    // Combined "Name on Date" clause for Annexure-E — avoids "on , on on , on"
+    const deceasedDeathParts = [];
+    for (let h = 1; h <= 4; h++) {
+      const rawName =
+        templateMappings[`Name as per DC H${h}`] ||
+        valueMap[`Name as per DC H${h}`] ||
+        valueMap[`name_dc_h${h}`] ||
+        '';
+      const rawDod =
+        templateMappings[`DOD H${h}`] ||
+        valueMap[`DOD H${h}`] ||
+        valueMap[`dod_h${h}`] ||
+        valueMap[`Date of demise** H${h}`] ||
+        valueMap[`Date of demise H${h}`] ||
+        '';
+      const name = String(rawName).trim();
+      const dod = String(rawDod).trim();
+      const nameOk = name && !name.startsWith('[') && name.toLowerCase() !== 'undefined';
+      const dodOk = dod && !dod.startsWith('[') && dod.toLowerCase() !== 'undefined';
+      if (nameOk && dodOk) deceasedDeathParts.push(`${name} on ${dod}`);
+      else if (nameOk) deceasedDeathParts.push(name);
+      else if (dodOk) deceasedDeathParts.push(dod);
+    }
+    templateMappings['Deceased Death Details'] = cleanCommaSeparatedList(deceasedDeathParts.join(', '));
+
+    const certificateHolderNames = [];
+    for (let h = 1; h <= 4; h++) {
+      const certVal =
+        templateMappings[`Name as per Certificate H${h}`] ||
+        valueMap[`Name as per Certificate H${h}`] ||
+        valueMap[`name_cert_h${h}`];
+      if (certVal && String(certVal).trim() && !String(certVal).trim().startsWith('[')) {
+        certificateHolderNames.push(String(certVal).trim());
+      }
+    }
+    const deceasedCertificateNamesJoined = cleanCommaSeparatedList(certificateHolderNames.join(', '));
+    templateMappings['Deceased Names Certificate'] = deceasedCertificateNamesJoined;
+    templateMappings['Deceased Name Certificate'] = deceasedCertificateNamesJoined;
+
+    const joinAddressContact = (address, mobile, pin) => {
+      const parts = [address, mobile, pin]
+        .map((p) => (p || '').toString().trim())
+        .filter((p) => p && !p.match(/^[,.\s&]+$/));
+      return cleanCommaSeparatedList(parts.join(', '));
+    };
+
+    for (let num = 1; num <= 3; num++) {
+      const cnSuffix = `C${num}`;
+      templateMappings[`Address Contact ${cnSuffix}`] = joinAddressContact(
+        templateMappings[`Address ${cnSuffix}`] || valueMap[`Address ${cnSuffix}`],
+        templateMappings[`Mobile No ${cnSuffix}`] || valueMap[`Mobile No ${cnSuffix}`],
+        templateMappings[`PIN ${cnSuffix}`] || valueMap[`PIN ${cnSuffix}`]
+      );
+    }
+
+    // Legal Heir (LH) field mappings — LH1 through LH10
+    for (let lhNum = 1; lhNum <= 10; lhNum++) {
+      const lhSuffix = `LH${lhNum}`;
+      const lhSnake = `lh${lhNum}`;
+
+      const lhAadharName = valueMap[`Name as per Aadhar ${lhSuffix}`] || valueMap[`name_aadhar_${lhSnake}`];
+      templateMappings[`Name as per Aadhar ${lhSuffix}`] = getValueOrPlaceholder(lhAadharName, `Name as per Aadhar ${lhSuffix}`);
+      templateMappings[`Name as per PAN ${lhSuffix}`] = getValueOrPlaceholder(
+        valueMap[`Name as per PAN ${lhSuffix}`] || valueMap[`name_pan_${lhSnake}`] || lhAadharName,
+        `Name as per PAN ${lhSuffix}`
+      );
+      templateMappings[`Name as per CML ${lhSuffix}`] = getValueOrPlaceholder(
+        valueMap[`Name as per CML ${lhSuffix}`] || lhAadharName,
+        `Name as per CML ${lhSuffix}`
+      );
+      templateMappings[`Name as per Bank ${lhSuffix}`] = getValueOrPlaceholder(
+        valueMap[`Name as per Bank ${lhSuffix}`] || lhAadharName,
+        `Name as per Bank ${lhSuffix}`
+      );
+      templateMappings[`Name as per Passport ${lhSuffix}`] = getValueOrPlaceholder(
+        valueMap[`Name as per Passport ${lhSuffix}`] || lhAadharName,
+        `Name as per Passport ${lhSuffix}`
+      );
+      templateMappings[`Name as per Succession/WILL/LHA ${lhSuffix}`] = getValueOrPlaceholder(
+        valueMap[`Name as per Succession/WILL/LHA ${lhSuffix}`] ||
+        valueMap[`Name as per Succession/Will ${lhSuffix}`] ||
+        valueMap[`name_succession_${lhSnake}`],
+        `Name as per Succession/WILL/LHA ${lhSuffix}`
+      );
+      templateMappings[`Name as per Succession/Will ${lhSuffix}`] = getValueOrPlaceholder(
+        valueMap[`Name as per Succession/Will ${lhSuffix}`] ||
+        valueMap[`Name as per Succession/WILL/LHA ${lhSuffix}`],
+        `Name as per Succession/Will ${lhSuffix}`
+      );
+      templateMappings[`Name as per Cert ${lhSuffix}`] = getValueOrPlaceholder(
+        valueMap[`Name as per Cert ${lhSuffix}`] || lhAadharName,
+        `Name as per Cert ${lhSuffix}`
+      );
+      templateMappings[`Father Name ${lhSuffix}`] = getValueOrPlaceholder(
+        valueMap[`Father Name ${lhSuffix}`] || valueMap[`father_name_${lhSnake}`],
+        `Father Name ${lhSuffix}`
+      );
+      templateMappings[`Address ${lhSuffix}`] = getValueOrPlaceholder(
+        valueMap[`Address ${lhSuffix}`] || valueMap[`address_${lhSnake}`],
+        `Address ${lhSuffix}`
+      );
+      templateMappings[`Mobile No ${lhSuffix}`] = getValueOrPlaceholder(
+        valueMap[`Mobile No ${lhSuffix}`] || valueMap[`mobile_${lhSnake}`],
+        `Mobile No ${lhSuffix}`
+      );
+      templateMappings[`Age ${lhSuffix}`] = getValueOrPlaceholder(
+        valueMap[`Age ${lhSuffix}`] || valueMap[`age_${lhSnake}`],
+        `Age ${lhSuffix}`
+      );
+
+      const lhRelation = valueMap[`Relation ${lhSuffix}`] ||
+        valueMap[`relation_${lhSnake}`] ||
+        valueMap[`Relation with Deceased Person ${lhSuffix}`] ||
+        valueMap[`Relation with Deceased ${lhSuffix}`];
+
+      templateMappings[`Relation ${lhSuffix}`] = getValueOrPlaceholder(lhRelation, `Relation ${lhSuffix}`);
+      templateMappings[`Relation with Deceased Person ${lhSuffix}`] = getValueOrPlaceholder(lhRelation, `Relation with Deceased Person ${lhSuffix}`);
+      templateMappings[`Relation with Deceased ${lhSuffix}`] = getValueOrPlaceholder(lhRelation, `Relation with Deceased ${lhSuffix}`);
+      templateMappings[`Claimant Relation ${lhSuffix}`] = getValueOrPlaceholder(lhRelation, `Claimant Relation ${lhSuffix}`);
+      templateMappings[`Address Contact ${lhSuffix}`] = joinAddressContact(
+        templateMappings[`Address ${lhSuffix}`],
+        templateMappings[`Mobile No ${lhSuffix}`],
+        templateMappings[`PIN ${lhSuffix}`]
+      );
+    }
+
+    const claimantNamesList = [];
+    const isMappedName = (val) =>
+      val && String(val).trim() && !String(val).trim().startsWith('[');
+    for (let num = 1; num <= 3; num++) {
+      const cnVal = templateMappings[`Name as per Aadhar C${num}`];
+      if (isMappedName(cnVal)) claimantNamesList.push(String(cnVal).trim());
+    }
+    for (let lhNum = 1; lhNum <= 10; lhNum++) {
+      const lhVal = templateMappings[`Name as per Aadhar LH${lhNum}`];
+      if (isMappedName(lhVal)) claimantNamesList.push(String(lhVal).trim());
+    }
+    const claimantNamesJoined = cleanCommaSeparatedList(claimantNamesList.join(', '));
+    templateMappings['Claimant Names'] = claimantNamesJoined;
+    templateMappings['All Claimant Names'] = claimantNamesJoined;
+    templateMappings['Name(s) of the legal heir(s)/claimant(s)'] = claimantNamesJoined;
     
     // Global "Date of demise**" mapping for ISR-5 templates (uses first available DOD value)
     // This handles cases where the template has a single "Date of demise**" placeholder
@@ -2377,39 +2591,12 @@ const downloadPopulatedTemplate = async (req, res) => {
       },
     });
 
-    // POST-PROCESSING: Check if the generated document still contains "undefined" text
-    // This is a last resort step to catch any remaining undefined values
+    // POST-PROCESSING: Clean formatting artifacts and remove blank table rows
     try {
       const zip = new PizZip(populatedBuffer);
-      const documentXml = zip.files["word/document.xml"];
-      
-      if (documentXml) {
-        let content = documentXml.asText();
-        const originalContent = content;
-        
-        // Replace any remaining "undefined" text with empty string
-        content = content.replace(/undefined/gi, ''); // Case insensitive replacement
-        content = content.replace(/UNDEFINED/gi, ''); // Also catch uppercase
-        content = content.replace(/null/gi, ''); // Also catch null values
-        content = content.replace(/NULL/gi, ''); // Also catch uppercase NULL
-        
-        // Keep red color for actual data values, only change placeholders to black
-        // This approach preserves the original template formatting for real data
-        console.log('✅ Preserving red color for actual database values, only cleaning undefined text');
-        
-        if (content !== originalContent) {
-          console.log('🚨 POST-PROCESSING: Found and removed "undefined" text, preserving data colors');
-          
-          // Update the document.xml content
-          zip.file("word/document.xml", content);
-          
-          // Regenerate the buffer with cleaned content
-          populatedBuffer = zip.generate({ type: 'nodebuffer' });
-          console.log('✅ Document post-processed and cleaned');
-        } else {
-          console.log('✅ No "undefined" text found in generated document');
-        }
-      }
+      postProcessDocxZip(zip);
+      populatedBuffer = zip.generate({ type: 'nodebuffer' });
+      console.log('✅ Document post-processed: cleaned &&, commas, and empty table rows');
     } catch (postProcessError) {
       console.error('Warning: Post-processing failed, using original buffer:', postProcessError.message);
       // Continue with original buffer if post-processing fails
