@@ -204,10 +204,23 @@ const isEmptyFaceValue = (text) => {
 };
 
 /**
+ * Affidavit Cum Indemnity / similar: NOS cell keeps static label when empty:
+ * "Number and Face Value Rs./-" — real rows start with quantity ("37 Number and...").
+ */
+const isEmptyNosOrFaceLabelCell = (text) => {
+  if (isEmptyOrSeparatorOnly(text) || isEmptyFaceValue(text)) return true;
+  const t = String(text).trim();
+  if (/number\s*&?\s*face\s*value|number\s+and\s+face\s+value/i.test(t)) {
+    return !/^\d+/.test(t);
+  }
+  return false;
+};
+
+/**
  * True when a securities table data row has no real securities identifiers,
  * even if Company Name / Folio / Face Value are repeated.
  * Supports:
- * - 5-col Annexure-E: Company, Folio, NOS, SC, DN
+ * - 5-col Annexure-E / Affidavit Cum Indemnity: Company, Folio, NOS(+label), SC, DN
  * - 6-col Form-B: Company, Folio, NOS, Face, SC, DN
  * - 6-col ISR-1 auth: S.No., Company, Folio, NOS, Face, DN
  */
@@ -219,9 +232,10 @@ const isEmptySecuritiesDataRow = (rowContent) => {
   const joined = cellTexts.join(' ').toLowerCase();
 
   const headerLike =
+    /^company$/i.test(cellTexts[0]) ||
     /company\s*name/i.test(cellTexts[0]) ||
     (/s\.?\s*no\.?/i.test(cellTexts[0]) && /company/i.test(joined)) ||
-    (/folio/i.test(cellTexts[1]) && /quantity|securities held/i.test(joined)) ||
+    (/folio/i.test(cellTexts[1]) && /quantity|securities held|number.*face/i.test(joined)) ||
     /securities\s*held/i.test(joined) ||
     (/certificate/i.test(joined) && /distinctive/i.test(joined) && /company/i.test(joined));
   if (headerLike) return false;
@@ -231,7 +245,8 @@ const isEmptySecuritiesDataRow = (rowContent) => {
     return false;
   }
 
-  const isBlankSecurity = (t) => isEmptyOrSeparatorOnly(t) || isEmptyFaceValue(t);
+  const isBlankSecurity = (t) =>
+    isEmptyOrSeparatorOnly(t) || isEmptyFaceValue(t) || isEmptyNosOrFaceLabelCell(t);
 
   // ISR-1 authorization table: S.No. | Company | Folio | Quantity | Face | DN
   if (cells.length >= 6 && /^\d{1,2}$/.test(cellTexts[0])) {
@@ -243,8 +258,8 @@ const isEmptySecuritiesDataRow = (rowContent) => {
     return isBlankSecurity(cellTexts[2]) && isBlankSecurity(cellTexts[4]) && isBlankSecurity(cellTexts[5]);
   }
 
-  // 5 columns: Company, Folio, NOS, SC, DN
-  return [2, 3, 4].every((i) => isBlankSecurity(cellTexts[i]));
+  // 5 columns: Company, Folio, NOS(+Face label), SC, DN
+  return isBlankSecurity(cellTexts[2]) && isBlankSecurity(cellTexts[3]) && isBlankSecurity(cellTexts[4]);
 };
 
 /**
