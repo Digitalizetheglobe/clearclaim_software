@@ -32,7 +32,15 @@ module.exports = (sequelize) => {
       }
     },
     type: {
-      type: DataTypes.ENUM('data_review_approved', 'data_review_rejected', 'template_review_approved', 'template_review_rejected', 'review_completed', 'feedback_received'),
+      type: DataTypes.ENUM(
+        'data_review_approved',
+        'data_review_rejected',
+        'template_review_approved',
+        'template_review_rejected',
+        'review_completed',
+        'feedback_received',
+        'case_reassigned'
+      ),
       allowNull: false
     },
     title: {

@@ -47,6 +47,19 @@ module.exports = (sequelize) => {
     assigned_to: {
       type: DataTypes.INTEGER,
       allowNull: true
+    },
+    // When Super Admin reassigns: previous owner still sees case as disabled
+    previous_assigned_to: {
+      type: DataTypes.INTEGER,
+      allowNull: true
+    },
+    reassigned_by: {
+      type: DataTypes.INTEGER,
+      allowNull: true
+    },
+    reassigned_at: {
+      type: DataTypes.DATE,
+      allowNull: true
     }
   }, {
     tableName: 'cases',

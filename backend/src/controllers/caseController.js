@@ -1,5 +1,6 @@
-const { Case, User, Company } = require('../models');
+const { Case, User, Company, Notification } = require('../models');
 const { Op, sequelize } = require('sequelize');
+const { getTemplateReviewerInclude } = require('../utils/companySchemaFeatures');
 
 // Generate unique case ID (CC-YYYY-XXXX format)
 const generateCaseId = async () => {
@@ -26,15 +27,28 @@ const generateCaseId = async () => {
   return `${yearPrefix}${nextNumber.toString().padStart(4, '0')}`;
 };
 
+const getUserRoles = (user) => {
+  if (!user?.role) return [];
+  return Array.isArray(user.role) ? user.role : [user.role];
+};
+
 // Get all cases with optional filters
 const getAllCases = async (req, res) => {
   try {
-    const { status, assigned_to, created_by, page = 1, limit = 1000 } = req.query;
+    const { status, assigned_to, created_by, unassigned, lost, page = 1, limit = 1000 } = req.query;
     
     const whereClause = {};
     if (status) whereClause.status = status;
-    if (assigned_to) whereClause.assigned_to = assigned_to;
     if (created_by) whereClause.created_by = created_by;
+
+    // Lost / unowned cases: no assigned employee
+    if (unassigned === 'true' || lost === 'true') {
+      whereClause.assigned_to = { [Op.is]: null };
+    } else if (assigned_to === 'null' || assigned_to === 'unassigned') {
+      whereClause.assigned_to = { [Op.is]: null };
+    } else if (assigned_to) {
+      whereClause.assigned_to = assigned_to;
+    }
 
     const offset = (page - 1) * limit;
     
@@ -54,14 +68,15 @@ const getAllCases = async (req, res) => {
         {
           model: Company,
           as: 'companies',
-          attributes: ['id', 'company_name', 'status', 'created_at'],
+          attributes: ['id', 'company_name', 'status', 'created_at', 'assigned_to', 'template_reviewer_id'],
           include: [
             {
               model: User,
               as: 'assignedUser',
               attributes: ['id', 'name', 'email']
-            }
-          ]
+            },
+            getTemplateReviewerInclude(User)
+          ].filter(Boolean)
         }
       ],
       order: [['created_at', 'DESC']],
@@ -100,14 +115,15 @@ const getCaseById = async (req, res) => {
         {
           model: Company,
           as: 'companies',
-          attributes: ['id', 'company_name', 'status', 'created_at'],
+          attributes: ['id', 'company_name', 'status', 'created_at', 'assigned_to', 'template_reviewer_id'],
           include: [
             {
               model: User,
               as: 'assignedUser',
               attributes: ['id', 'name', 'email']
-            }
-          ]
+            },
+            getTemplateReviewerInclude(User)
+          ].filter(Boolean)
         }
       ]
     });
@@ -213,6 +229,30 @@ const updateCase = async (req, res) => {
       return res.status(404).json({ error: 'Case not found.' });
     }
 
+    const roles = getUserRoles(req.user);
+    const isAdmin = roles.includes('admin');
+    const isSuperAdmin = roles.includes('super_admin');
+    const isAssignee = caseData.assigned_to != null && Number(caseData.assigned_to) === Number(req.user.id);
+
+    // Super admin: assign/reassign + change case status (not full case field edit like admin)
+    if (isSuperAdmin && !isAdmin) {
+      const tryingOtherFields =
+        client_name !== undefined ||
+        client_mobile !== undefined ||
+        client_email !== undefined ||
+        case_title !== undefined ||
+        deal_id !== undefined ||
+        cp_name !== undefined;
+
+      if (tryingOtherFields) {
+        return res.status(403).json({
+          error: 'Super admin can assign/reassign cases and change case status only.'
+        });
+      }
+    } else if (!isAdmin && !isAssignee && !isSuperAdmin) {
+      return res.status(403).json({ error: 'Access denied. Insufficient permissions to update this case.' });
+    }
+
     if (status !== undefined && !ALLOWED_CASE_STATUSES.includes(status)) {
       return res.status(400).json({
         error: `Invalid case status "${status}". Allowed values: ${ALLOWED_CASE_STATUSES.join(', ')}.`
@@ -220,17 +260,138 @@ const updateCase = async (req, res) => {
     }
 
     const updateFields = {};
-    if (client_name !== undefined) updateFields.client_name = client_name;
-    if (client_mobile !== undefined) updateFields.client_mobile = client_mobile;
-    if (client_email !== undefined) updateFields.client_email = client_email;
-    if (case_title !== undefined) updateFields.case_title = case_title;
-    if (deal_id !== undefined) updateFields.deal_id = deal_id;
-    if (cp_name !== undefined) updateFields.cp_name = cp_name;
-    if (status !== undefined) updateFields.status = status;
+    if (isAdmin || isAssignee) {
+      if (client_name !== undefined) updateFields.client_name = client_name;
+      if (client_mobile !== undefined) updateFields.client_mobile = client_mobile;
+      if (client_email !== undefined) updateFields.client_email = client_email;
+      if (case_title !== undefined) updateFields.case_title = case_title;
+      if (deal_id !== undefined) updateFields.deal_id = deal_id;
+      if (cp_name !== undefined) updateFields.cp_name = cp_name;
+    }
 
     const normalizedAssignedTo = normalizeAssignedTo(assigned_to);
     if (normalizedAssignedTo !== undefined) {
-      updateFields.assigned_to = normalizedAssignedTo;
+      if (isAdmin || isSuperAdmin || (isAssignee && normalizedAssignedTo === null)) {
+        const previousAssigneeId = caseData.assigned_to != null ? Number(caseData.assigned_to) : null;
+        const isChangingOwner =
+          normalizedAssignedTo != null &&
+          previousAssigneeId != null &&
+          Number(normalizedAssignedTo) !== previousAssigneeId;
+
+        updateFields.assigned_to = normalizedAssignedTo;
+
+        // Track reassignment so previous employee still sees a disabled case card
+        if (isChangingOwner && (isSuperAdmin || isAdmin)) {
+          updateFields.previous_assigned_to = previousAssigneeId;
+          updateFields.reassigned_by = req.user.id;
+          updateFields.reassigned_at = new Date();
+        } else if (normalizedAssignedTo != null && previousAssigneeId == null) {
+          // Fresh assignment from lost/unowned — clear stale reassignment markers for new owner view
+          // Keep previous_assigned_to if we want history; leave as-is unless nulling intentionally
+        }
+
+        // Assign / reassign: ensure status is assigned when giving the case an owner
+        if (normalizedAssignedTo != null) {
+          if (status !== undefined && ALLOWED_CASE_STATUSES.includes(status)) {
+            updateFields.status = status;
+          } else if (caseData.status === 'pending' || caseData.assigned_to == null) {
+            updateFields.status = 'assigned';
+          }
+        } else if ((isAdmin || isSuperAdmin) && status !== undefined) {
+          updateFields.status = status;
+        }
+
+        await caseData.update(updateFields);
+
+        // Notify previous employee + new employee when Super Admin / Admin reassigns
+        if (isChangingOwner && (isSuperAdmin || isAdmin)) {
+          try {
+            const [newEmployee, actor] = await Promise.all([
+              User.findByPk(normalizedAssignedTo, { attributes: ['id', 'name', 'email'] }),
+              User.findByPk(req.user.id, { attributes: ['id', 'name', 'email'] }),
+            ]);
+            const actorLabel = isSuperAdmin ? 'Super Admin' : 'Admin';
+            const actorName = actor?.name || actorLabel;
+            const newName = newEmployee?.name || 'another employee';
+
+            if (previousAssigneeId) {
+              await Notification.create({
+                user_id: previousAssigneeId,
+                case_id: caseData.id,
+                type: 'case_reassigned',
+                title: 'Case reassigned',
+                message: `Case ${caseData.case_id} ("${caseData.case_title}") was reassigned to ${newName} by ${actorLabel} (${actorName}). This case is no longer active for you.`,
+                metadata: {
+                  case_id: caseData.case_id,
+                  case_db_id: caseData.id,
+                  previous_assigned_to: previousAssigneeId,
+                  new_assigned_to: normalizedAssignedTo,
+                  new_assigned_name: newName,
+                  reassigned_by: req.user.id,
+                  reassigned_by_name: actorName,
+                  reassigned_by_role: isSuperAdmin ? 'super_admin' : 'admin',
+                },
+              });
+            }
+
+            await Notification.create({
+              user_id: normalizedAssignedTo,
+              case_id: caseData.id,
+              type: 'case_reassigned',
+              title: 'Case assigned to you',
+              message: `Case ${caseData.case_id} ("${caseData.case_title}") was assigned to you by ${actorLabel} (${actorName}).`,
+              metadata: {
+                case_id: caseData.case_id,
+                case_db_id: caseData.id,
+                previous_assigned_to: previousAssigneeId,
+                new_assigned_to: normalizedAssignedTo,
+                reassigned_by: req.user.id,
+                reassigned_by_name: actorName,
+                reassigned_by_role: isSuperAdmin ? 'super_admin' : 'admin',
+              },
+            });
+          } catch (notifyErr) {
+            console.warn('Reassignment notification skipped:', notifyErr.message);
+          }
+        }
+
+        // Fetch updated case with user details
+        const updatedCase = await Case.findByPk(caseId, {
+          include: [
+            {
+              model: User,
+              as: 'createdByUser',
+              attributes: ['id', 'name', 'email']
+            },
+            {
+              model: User,
+              as: 'assignedUser',
+              attributes: ['id', 'name', 'email']
+            },
+            {
+              model: User,
+              as: 'previousAssignedUser',
+              attributes: ['id', 'name', 'email'],
+              required: false
+            },
+            {
+              model: User,
+              as: 'reassignedByUser',
+              attributes: ['id', 'name', 'email'],
+              required: false
+            }
+          ]
+        });
+
+        return res.json({
+          message: 'Case updated successfully',
+          case: updatedCase
+        });
+      } else {
+        return res.status(403).json({ error: 'You cannot reassign this case.' });
+      }
+    } else if ((isAdmin || isAssignee || isSuperAdmin) && status !== undefined) {
+      updateFields.status = status;
     }
 
     if (Object.keys(updateFields).length === 0) {
@@ -376,49 +537,78 @@ const getCaseStats = async (req, res) => {
 };
 
 // Get cases assigned to the current logged-in user
+// Also returns cases Super Admin reassigned away from this user (disabled view)
 const getMyAssignedCases = async (req, res) => {
   try {
     const userId = req.user.id; // From auth middleware
     
     const { page = 1, limit = 10, status } = req.query;
     const offset = (page - 1) * limit;
-    
-    const whereClause = { assigned_to: userId };
-    if (status) whereClause.status = status;
 
-    const cases = await Case.findAndCountAll({
-      where: whereClause,
-      include: [
-        {
-          model: User,
-          as: 'createdByUser',
-          attributes: ['id', 'name', 'email']
-        },
-        {
-          model: User,
-          as: 'assignedUser',
-          attributes: ['id', 'name', 'email']
-        },
-        {
-          model: Company,
-          as: 'companies',
-          attributes: ['id', 'company_name', 'status', 'created_at'],
-          include: [
-            {
-              model: User,
-              as: 'assignedUser',
-              attributes: ['id', 'name', 'email']
-            }
-          ]
-        }
-      ],
-      order: [['created_at', 'DESC']],
-      limit: parseInt(limit),
-      offset: parseInt(offset)
-    });
+    const caseIncludes = [
+      {
+        model: User,
+        as: 'createdByUser',
+        attributes: ['id', 'name', 'email']
+      },
+      {
+        model: User,
+        as: 'assignedUser',
+        attributes: ['id', 'name', 'email']
+      },
+      {
+        model: User,
+        as: 'previousAssignedUser',
+        attributes: ['id', 'name', 'email'],
+        required: false
+      },
+      {
+        model: User,
+        as: 'reassignedByUser',
+        attributes: ['id', 'name', 'email'],
+        required: false
+      },
+      {
+        model: Company,
+        as: 'companies',
+        attributes: ['id', 'company_name', 'status', 'created_at'],
+        include: [
+          {
+            model: User,
+            as: 'assignedUser',
+            attributes: ['id', 'name', 'email']
+          }
+        ]
+      }
+    ];
 
-    // Format the response
-    const formattedCases = cases.rows.map(caseItem => ({
+    const activeWhere = { assigned_to: userId };
+    if (status) activeWhere.status = status;
+
+    // Reassigned away: still show as disabled for the previous employee
+    const reassignedAwayWhere = {
+      previous_assigned_to: userId,
+      assigned_to: { [Op.and]: [{ [Op.ne]: null }, { [Op.ne]: userId }] }
+    };
+
+    const [activeCases, reassignedAwayCases] = await Promise.all([
+      Case.findAndCountAll({
+        where: activeWhere,
+        include: caseIncludes,
+        order: [['created_at', 'DESC']],
+        limit: parseInt(limit),
+        offset: parseInt(offset)
+      }),
+      // Load reassigned-away without pagination offset so they always appear for awareness
+      Case.findAll({
+        where: reassignedAwayWhere,
+        include: caseIncludes,
+        order: [['reassigned_at', 'DESC']],
+        limit: 50
+      })
+    ]);
+
+    const formatCase = (caseItem, isReassignedAway = false) => ({
       id: caseItem.id,
       case_id: caseItem.case_id,
       case_title: caseItem.case_title,
@@ -431,16 +621,38 @@ const getMyAssignedCases = async (req, res) => {
       actual_completion_date: caseItem.actual_completion_date,
       created_at: caseItem.created_at,
       updated_at: caseItem.updated_at,
+      assigned_to: caseItem.assigned_to,
+      previous_assigned_to: caseItem.previous_assigned_to,
+      reassigned_by: caseItem.reassigned_by,
+      reassigned_at: caseItem.reassigned_at,
       created_by_user: caseItem.createdByUser,
       assigned_user: caseItem.assignedUser,
-      companies: caseItem.companies || []
-    }));
+      previous_assigned_user: caseItem.previousAssignedUser,
+      reassigned_by_user: caseItem.reassignedByUser,
+      companies: caseItem.companies || [],
+      is_reassigned_away: isReassignedAway,
+      reassignment_message: isReassignedAway
+        ? `This case was assigned to ${caseItem.assignedUser?.name || 'another employee'} by Super Admin${
+            caseItem.reassignedByUser?.name ? ` (${caseItem.reassignedByUser.name})` : ''
+          }. It is no longer active for you.`
+        : null
+    });
+
+    const formattedActive = activeCases.rows.map((c) => formatCase(c, false));
+    const activeIds = new Set(formattedActive.map((c) => c.id));
+    const formattedReassigned = reassignedAwayCases
+      .filter((c) => !activeIds.has(c.id))
+      .map((c) => formatCase(c, true));
+
+    // Active cases first, then disabled reassigned-away cases
+    const formattedCases = [...formattedActive, ...formattedReassigned];
 
     res.json({
       cases: formattedCases,
-      total: cases.count,
+      total: activeCases.count,
+      reassignedAwayCount: formattedReassigned.length,
       currentPage: parseInt(page),
-      totalPages: Math.ceil(cases.count / limit),
+      totalPages: Math.ceil(activeCases.count / limit) || 1,
       message: 'Assigned cases fetched successfully'
     });
   } catch (error) {

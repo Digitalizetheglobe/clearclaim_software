@@ -19,6 +19,7 @@ const {
   getReviewerStats,
   submitForTemplateReview,
   assignForDataReview,
+  reassignCompanyReviewers,
   getCompanyNotes,
   addCompanyNote,
   getCompanyStatusHistory
@@ -81,6 +82,9 @@ router.post('/:companyId/reject-review', rejectCompanyReview);
 
 // Submit company for template review (separate from data review)
 router.post('/:companyId/submit-template-review', submitForTemplateReview);
+
+// Super Admin / Admin: reassign Excel and/or template reviewers
+router.post('/:companyId/reassign-reviewers', reassignCompanyReviewers);
 
 // Duplicate company with all its values
 router.post('/:companyId/duplicate', duplicateCompany);

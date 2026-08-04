@@ -24,6 +24,31 @@ router.post('/register', async (req, res) => {
 
     // Convert role to array if it's a string (for backward compatibility)
     const rolesArray = Array.isArray(role) ? role : (role ? [role] : ['employee']);
+    const validRoles = ['admin', 'super_admin', 'sales', 'employee', 'data_reviewer', 'template_reviewer'];
+    const invalidRoles = rolesArray.filter((r) => !validRoles.includes(r));
+    if (invalidRoles.length > 0) {
+      return res.status(400).json({
+        error: `Invalid role(s): ${invalidRoles.join(', ')}. Valid roles are: ${validRoles.join(', ')}`
+      });
+    }
+
+    // Privileged roles (admin / super_admin) can only be assigned by an authenticated admin
+    const privileged = rolesArray.some((r) => r === 'admin' || r === 'super_admin');
+    if (privileged) {
+      try {
+        const token = req.header('Authorization')?.replace('Bearer ', '');
+        if (!token) {
+          return res.status(403).json({ error: 'Only an admin can create admin or super admin users.' });
+        }
+        const decoded = jwt.verify(token, process.env.JWT_SECRET);
+        const creatorRoles = Array.isArray(decoded.role) ? decoded.role : [decoded.role];
+        if (!creatorRoles.includes('admin')) {
+          return res.status(403).json({ error: 'Only an admin can create admin or super admin users.' });
+        }
+      } catch (authErr) {
+        return res.status(403).json({ error: 'Only an admin can create admin or super admin users.' });
+      }
+    }
 
     // Create user
     const user = await User.create({
@@ -256,8 +281,8 @@ router.get('/:id', async (req, res) => {
   }
 });
 
-// Update user (Admin only)
-router.put('/:id', auth, requireRole(['admin']), async (req, res) => {
+// Update user (Admin or Super Admin)
+router.put('/:id', auth, requireRole(['admin', 'super_admin']), async (req, res) => {
   try {
     const { id } = req.params;
     const { name, email, role } = req.body;
@@ -265,6 +290,20 @@ router.put('/:id', auth, requireRole(['admin']), async (req, res) => {
     const user = await User.findByPk(id);
     if (!user) {
       return res.status(404).json({ error: 'User not found.' });
+    }
+
+    const requesterRoles = Array.isArray(req.user.role) ? req.user.role : [req.user.role];
+    const isAdmin = requesterRoles.includes('admin');
+    const isSuperAdmin = requesterRoles.includes('super_admin');
+    const targetRoles = Array.isArray(user.role) ? user.role : [user.role].filter(Boolean);
+    const targetIsPrivileged =
+      targetRoles.includes('admin') || targetRoles.includes('super_admin');
+
+    // Super Admin cannot edit Admin / Super Admin accounts
+    if (isSuperAdmin && !isAdmin && targetIsPrivileged) {
+      return res.status(403).json({
+        error: 'Super Admin cannot edit Admin or Super Admin users.'
+      });
     }
 
     // Check if email is being changed and if it already exists
@@ -286,11 +325,22 @@ router.put('/:id', auth, requireRole(['admin']), async (req, res) => {
       const rolesArray = Array.isArray(role) ? role : [role];
       
       // Validate roles
-      const validRoles = ['admin', 'sales', 'employee', 'data_reviewer', 'template_reviewer'];
+      const validRoles = ['admin', 'super_admin', 'sales', 'employee', 'data_reviewer', 'template_reviewer'];
       const invalidRoles = rolesArray.filter(r => !validRoles.includes(r));
       if (invalidRoles.length > 0) {
         return res.status(400).json({ 
           error: `Invalid role(s): ${invalidRoles.join(', ')}. Valid roles are: ${validRoles.join(', ')}` 
+        });
+      }
+
+      // Super Admin cannot assign admin / super_admin roles
+      if (
+        isSuperAdmin &&
+        !isAdmin &&
+        rolesArray.some((r) => r === 'admin' || r === 'super_admin')
+      ) {
+        return res.status(403).json({
+          error: 'Only an Admin can assign Admin or Super Admin roles.'
         });
       }
       
@@ -408,8 +458,8 @@ router.put('/:id', auth, requireRole(['admin']), async (req, res) => {
   }
 });
 
-// Delete user (Admin only)
-router.delete('/:id', auth, requireRole(['admin']), async (req, res) => {
+// Delete user (Admin or Super Admin — Super Admin cannot delete Admin/Super Admin)
+router.delete('/:id', auth, requireRole(['admin', 'super_admin']), async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -422,6 +472,19 @@ router.delete('/:id', auth, requireRole(['admin']), async (req, res) => {
     const currentUserId = req.user?.id;
     if (currentUserId && parseInt(id) === parseInt(currentUserId)) {
       return res.status(400).json({ error: 'You cannot delete your own account.' });
+    }
+
+    const requesterRoles = Array.isArray(req.user.role) ? req.user.role : [req.user.role];
+    const isAdmin = requesterRoles.includes('admin');
+    const isSuperAdmin = requesterRoles.includes('super_admin');
+    const targetRoles = Array.isArray(user.role) ? user.role : [user.role].filter(Boolean);
+    const targetIsPrivileged =
+      targetRoles.includes('admin') || targetRoles.includes('super_admin');
+
+    if (isSuperAdmin && !isAdmin && targetIsPrivileged) {
+      return res.status(403).json({
+        error: 'Super Admin cannot delete Admin or Super Admin users.'
+      });
     }
 
     await user.destroy();
