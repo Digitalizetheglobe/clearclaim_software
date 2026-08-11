@@ -86,10 +86,10 @@ const cleanFormattedListText = (text) => {
   cleaned = cleaned.replace(/\s+&\s+Late\s*$/gi, '');
   cleaned = cleaned.replace(/\s+&\s+Late\s+(?=are\b)/gi, ' ');
 
-  // Remove trailing/leading separators: commas, semicolons, ampersands, dots
-  cleaned = cleaned.replace(/[,;\s]*&[\s,;]*$/g, '');
-  cleaned = cleaned.replace(/^[\s,;&;]+/g, '');
-  cleaned = cleaned.replace(/[,;\s]+$/g, '');
+  // Remove trailing/leading separators: commas, ampersands (PRESERVE semicolons and dots)
+  cleaned = cleaned.replace(/[,&\s]*&[\s,&]*$/g, '');
+  cleaned = cleaned.replace(/^[\s,&]+/g, '');
+  cleaned = cleaned.replace(/[,&\s]+$/g, '');
   // Collapse repeated commas (run until stable)
   do {
     prev = cleaned;
@@ -125,9 +125,9 @@ const cleanFormattedListText = (text) => {
   cleaned = cleaned.replace(/(\d)\s+#(?=\s|$)/g, '$1');
   cleaned = cleaned.replace(/([A-Za-z0-9])\s+#(?=\s*$)/g, '$1');
 
-  // Final trailing comma/semicolon cleanup after @ removal
-  cleaned = cleaned.replace(/[,;\s]+$/g, '');
-  cleaned = cleaned.replace(/^[,;\s]+/g, '');
+  // Final trailing comma cleanup after @ removal (PRESERVE semicolons)
+  cleaned = cleaned.replace(/[,&\s]+$/g, '');
+  cleaned = cleaned.replace(/^[,&\s]+/g, '');
 
   // Remove lone "or ." or trailing dot-only remnants
   cleaned = cleaned.replace(/\s+or\s*\.\s*$/gi, '');
@@ -291,62 +291,132 @@ const runUsesSymbolFont = (runXml) =>
  */
 const cleanParagraphsInXml = (xml) => {
   return xml.replace(/<w:p(?:\s[^>]*)?>([\s\S]*?)<\/w:p>/g, (fullMatch, pContent) => {
-    const runs = [...pContent.matchAll(/<w:r(?:\s[^>]*)?>([\s\S]*?)<\/w:r>/g)];
+    
+    // Extract all runs
+    const runs = [...pContent.matchAll(/(<w:r(?:\s[^>]*)?>)([\s\S]*?)(<\/w:r>)/g)];
     if (runs.length === 0) return fullMatch;
-
-    const textParts = [];
-    const tRegex = /<w:t[^>]*>([^<]*)<\/w:t>/g;
-    let match;
-    while ((match = tRegex.exec(pContent)) !== null) {
-      textParts.push(decodeXmlText(match[1]));
+    
+    // Group runs into segments separated by boundary runs (tabs, breaks, drawing, symbols, etc.)
+    const segments = [];
+    let currentSegment = [];
+    
+    for (let i = 0; i < runs.length; i++) {
+      const runFull = runs[i][0];
+      const runInner = runs[i][2];
+      
+      const isBoundary = /<w:(?:tab|br|cr|drawing|pict|object|lastRenderedPageBreak)/i.test(runInner) || runUsesSymbolFont(runFull);
+      
+      if (isBoundary) {
+        if (currentSegment.length > 0) {
+          segments.push([...currentSegment]);
+          currentSegment = [];
+        }
+        segments.push([runs[i]]);
+      } else {
+        currentSegment.push(runs[i]);
+      }
     }
-
-    if (textParts.length === 0) return fullMatch;
-
-    const fullText = textParts.join('');
-    const cleanedFull = cleanFormattedListText(fullText);
-    if (fullText === cleanedFull) return fullMatch;
-
-    // Prefer first body-text run (non-symbol font) that already has a w:t
-    let targetRunIdx = runs.findIndex((r) => {
-      if (runUsesSymbolFont(r[0])) return false;
-      return /<w:t[\s>]/.test(r[1]);
-    });
-
-    // If every run is symbol font, skip rewrite to avoid corrupting glyphs
-    if (targetRunIdx < 0) return fullMatch;
-
-    const escaped = escapeXmlText(cleanedFull);
-    let runCounter = 0;
-    const newContent = pContent.replace(/<w:r(?:\s[^>]*)?>([\s\S]*?)<\/w:r>/g, (runFull, runInner) => {
-      const thisIdx = runCounter++;
-      if (runUsesSymbolFont(runFull)) {
-        return runFull; // leave checkmarks / boxes untouched
+    if (currentSegment.length > 0) {
+      segments.push(currentSegment);
+    }
+    
+    let newPContent = pContent;
+    
+    // Process each segment
+    for (const segment of segments) {
+      if (segment.length === 0) continue;
+      
+      const firstRunFull = segment[0][0];
+      const firstRunInner = segment[0][2];
+      const isBoundarySegment = segment.length === 1 && (/<w:(?:tab|br|cr|drawing|pict|object|lastRenderedPageBreak)/i.test(firstRunInner) || runUsesSymbolFont(firstRunFull));
+      
+      if (isBoundarySegment) {
+        // Just clean the text inside this boundary run without touching anything else (ignore symbols)
+        if (!runUsesSymbolFont(firstRunFull)) {
+          const tRegex = /<w:t[^>]*>([^<]*)<\/w:t>/g;
+          let textParts = [];
+          let match;
+          while ((match = tRegex.exec(firstRunInner)) !== null) {
+            textParts.push(decodeXmlText(match[1]));
+          }
+          if (textParts.length > 0) {
+             const fullText = textParts.join('');
+             const cleaned = cleanFormattedListText(fullText);
+             const normalizeWhitespace = (str) => str.replace(/\s+/g, ' ').trim();
+             if (normalizeWhitespace(cleaned) !== normalizeWhitespace(fullText)) {
+                const escaped = escapeXmlText(cleaned);
+                let replaced = false;
+                const updatedInner = firstRunInner.replace(/<w:t([^>]*)>([^<]*)<\/w:t>/g, (_tm, attrs) => {
+                  if (replaced) return `<w:t${attrs}></w:t>`;
+                  replaced = true;
+                  const spaceAttr = escaped.startsWith(' ') || escaped.endsWith(' ') ? ' xml:space="preserve"' : '';
+                  let newAttrs = attrs || '';
+                  if (spaceAttr && !/xml:space=/.test(newAttrs)) newAttrs += spaceAttr;
+                  return `<w:t${newAttrs}>${escaped}</w:t>`;
+                });
+                newPContent = newPContent.replace(firstRunFull, segment[0][1] + updatedInner + segment[0][3]);
+             }
+          }
+        }
+        continue;
       }
-
-      if (thisIdx === targetRunIdx) {
-        let replaced = false;
-        const updatedInner = runInner.replace(/<w:t([^>]*)>([^<]*)<\/w:t>/g, (_tm, attrs) => {
-          if (replaced) return `<w:t${attrs}></w:t>`;
-          replaced = true;
-          const spaceAttr = escaped.startsWith(' ') || escaped.endsWith(' ') ? ' xml:space="preserve"' : '';
-          // preserve existing attrs but ensure space preserve when needed
-          let newAttrs = attrs || '';
-          if (spaceAttr && !/xml:space=/.test(newAttrs)) newAttrs += spaceAttr;
-          return `<w:t${newAttrs}>${escaped}</w:t>`;
-        });
-        return runFull.replace(runInner, updatedInner);
+      
+      // Normal segment - extract all text, clean it, and place it in the first run containing text
+      let textParts = [];
+      let targetRunIdx = -1;
+      
+      for (let i = 0; i < segment.length; i++) {
+        const runInner = segment[i][2];
+        const tRegex = /<w:t[^>]*>([^<]*)<\/w:t>/g;
+        let match;
+        let hasText = false;
+        while ((match = tRegex.exec(runInner)) !== null) {
+          textParts.push(decodeXmlText(match[1]));
+          hasText = true;
+        }
+        if (hasText && targetRunIdx === -1) {
+          targetRunIdx = i; // First run with text
+        }
       }
-
-      // Clear other body-text runs so we don't duplicate
-      if (/<w:t[\s>]/.test(runInner)) {
-        const cleared = runInner.replace(/<w:t([^>]*)>([^<]*)<\/w:t>/g, (_tm, attrs) => `<w:t${attrs}></w:t>`);
-        return runFull.replace(runInner, cleared);
+      
+      if (textParts.length === 0 || targetRunIdx === -1) continue;
+      
+      const fullText = textParts.join('');
+      const cleanedFull = cleanFormattedListText(fullText);
+      const normalizeWhitespace = (str) => str.replace(/\s+/g, ' ').trim();
+      if (normalizeWhitespace(fullText) === normalizeWhitespace(cleanedFull)) continue;
+      
+      const escaped = escapeXmlText(cleanedFull);
+      
+      for (let i = 0; i < segment.length; i++) {
+        const runMatch = segment[i];
+        const runFull = runMatch[0];
+        const runOpen = runMatch[1];
+        const runInner = runMatch[2];
+        const runClose = runMatch[3];
+        
+        if (!/<w:t[\s>]/.test(runInner)) continue;
+        
+        if (i === targetRunIdx) {
+          let replaced = false;
+          const updatedInner = runInner.replace(/<w:t([^>]*)>([^<]*)<\/w:t>/g, (_tm, attrs) => {
+            if (replaced) return `<w:t${attrs}></w:t>`;
+            replaced = true;
+            const spaceAttr = escaped.startsWith(' ') || escaped.endsWith(' ') ? ' xml:space="preserve"' : '';
+            let newAttrs = attrs || '';
+            if (spaceAttr && !/xml:space=/.test(newAttrs)) newAttrs += spaceAttr;
+            return `<w:t${newAttrs}>${escaped}</w:t>`;
+          });
+          newPContent = newPContent.replace(runFull, runOpen + updatedInner + runClose);
+        } else {
+          // Clear text from other runs in this segment to avoid duplicates
+          const clearedInner = runInner.replace(/<w:t([^>]*)>([^<]*)<\/w:t>/g, (_tm, attrs) => `<w:t${attrs}></w:t>`);
+          newPContent = newPContent.replace(runFull, runOpen + clearedInner + runClose);
+        }
       }
-      return runFull;
-    });
-
-    return fullMatch.replace(pContent, newContent);
+    }
+    
+    return fullMatch.replace(pContent, newPContent);
   });
 };
 
@@ -414,7 +484,7 @@ const removeTrailingEmptyTableColumns = (xml) => {
 const postProcessDocumentXml = (xml) => {
   let result = xml;
   result = result.replace(/undefined|null/gi, '');
-  result = cleanParagraphsInXml(result);
+  result = cleanParagraphsInXml(result); // Re-enabled with segmented logic to preserve formatting
   result = removeEmptyTableRows(result);
   result = removeTrailingEmptyTableColumns(result);
   return result;

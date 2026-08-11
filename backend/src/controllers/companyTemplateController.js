@@ -2026,8 +2026,16 @@ const downloadPopulatedTemplate = async (req, res) => {
         end: ']'
       },
       nullGetter: function(part, scopeManager) {
-        // Return empty string for any missing values
         if (!part.module) {
+          // Check if it's a known static field like Signature, Stamp, Photo, or just spaces
+          const p = (part.value || '').trim().toLowerCase();
+          if (p === '' || /^\s*$/.test(p) || p === 'x' || p === '✓' || p === 'tick' || 
+              p.includes('signature') || p.includes('sign') || p.includes('stamp') || 
+              p.includes('photo') || p.includes('thumb') || p.includes('impression') ||
+              p.includes('witness') || p === 'date' || p === 'place') {
+            return '[' + part.value + ']'; // Preserve the original tag exactly
+          }
+          // For actual data placeholders that have no value, return empty string
           return '';
         }
         if (part.module === 'rawxml') {
@@ -2221,6 +2229,15 @@ const downloadPopulatedTemplate = async (req, res) => {
       const uniquePlaceholders = [...new Set(foundPlaceholders)];
       let fixedCount = 0;
       uniquePlaceholders.forEach(placeholder => {
+        // CRITICAL FIX: Don't map static placeholders to empty string, let nullGetter preserve them
+        const p = placeholder.trim().toLowerCase();
+        if (p === '' || /^\s*$/.test(p) || p === 'x' || p === '✓' || p === 'tick' || 
+            p.includes('signature') || p.includes('sign') || p.includes('stamp') || 
+            p.includes('photo') || p.includes('thumb') || p.includes('impression') ||
+            p.includes('witness') || p === 'date' || p === 'place') {
+          return; // Skip static fields so docxtemplater's nullGetter preserves them
+        }
+        
         // CRITICAL: Placeholder is already cleaned during extraction, but ensure it's properly trimmed
         // The placeholder might have been cleaned from XML tags, so use it as-is
         const normalizedPlaceholder = placeholder.trim();
