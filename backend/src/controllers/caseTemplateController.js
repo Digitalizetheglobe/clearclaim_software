@@ -3,7 +3,7 @@ const fs = require('fs').promises;
 const path = require('path');
 const Docxtemplater = require('docxtemplater');
 const PizZip = require('pizzip');
-const { postProcessDocxZip } = require('../utils/templateDocumentUtils');
+const { postProcessDocxZip, sanitizeTemplateZip } = require('../utils/templateDocumentUtils');
 
 // Get all available templates
 const getAllTemplates = async (req, res) => {
@@ -527,13 +527,16 @@ const mapCaseValuesToTemplate = async (caseId, templatePath) => {
     // 4. Final validation - ensure data types match field types
     Object.entries(valueMap).forEach(([key, value]) => {
       if (value && typeof value === 'string') {
-        // PAN fields should be alphanumeric, 10+ chars, no spaces
-        if (key.includes('PAN') && (value.includes(' ') || value.length < 10)) {
+        // PAN *number* fields only — NOT "Name as per PAN C1"
+        const isPanNumberField =
+          /^(PAN(\s*C\d+)?|pan_c\d+)$/i.test(String(key).trim()) &&
+          !/name\s+as\s+per\s+pan/i.test(key);
+        if (isPanNumberField && (value.includes(' ') || value.length < 10)) {
           console.log(`⚠️ Invalid PAN format for ${key}: ${value}`);
           valueMap[key] = '';
         }
         // Name fields should have spaces (multiple words)
-        if (key.includes('Name') && !key.includes('PAN') && !value.includes(' ') && value.length > 5) {
+        if (key.includes('Name') && !isPanNumberField && !value.includes(' ') && value.length > 5) {
           console.log(`⚠️ Suspicious name format for ${key}: ${value}`);
         }
       }
@@ -759,6 +762,7 @@ const downloadPopulatedTemplate = async (req, res) => {
 
     // Create a new zip file from the template
     const zip = new PizZip(templateBuffer);
+    sanitizeTemplateZip(zip);
 
     // Create docxtemplater instance
     const doc = new Docxtemplater(zip, {

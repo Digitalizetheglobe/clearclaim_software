@@ -43,14 +43,37 @@ const escapeXmlText = (text) => {
 const cleanFormattedListText = (text) => {
   if (!text || typeof text !== 'string') return '';
 
+  // Keep intentional lone punctuation (e.g. "," after "day of" tab in affidavits)
+  if (/^[,.;:()]+$/.test(text.trim())) {
+    return text.trim();
+  }
+
   let cleaned = text;
+  let prev;
 
   // Remove undefined/null remnants
   cleaned = cleaned.replace(/undefined|null/gi, '');
 
-  // Collapse repeated ampersands: "& &", "&&", "&  &"
-  cleaned = cleaned.replace(/\s*&\s*&\s*/g, ' ');
-  cleaned = cleaned.replace(/&{2,}/g, '');
+  // Collapse repeated ampersands to a single separator: "A & & B" → "A & B"
+  // (empty optional slots like C2/C3 leave orphan "&" between real values)
+  do {
+    prev = cleaned;
+    cleaned = cleaned.replace(/\s*&\s*(?:&\s*)+/g, ' & ');
+    cleaned = cleaned.replace(/&{2,}/g, '&');
+  } while (cleaned !== prev);
+
+  // Affidavit / multi-claimant: remove "&" when the next value is missing and the
+  // next token is structural legal text (not another name).
+  // e.g. "Ramesh & Anuradha & Son / daughter..." → "Ramesh & Anuradha Son / daughter..."
+  // e.g. "Father1 & Father2 & respectively" → "Father1 & Father2 respectively"
+  // e.g. "Name1 & Name2 & swear" → "Name1 & Name2 swear"
+  const ampBeforeStructure =
+    /\s*&\s+(?=(?:Son|daughter|spouse|respectively|swear|further|do\b|residing|having|held|that\b|whose|who\b|are\b|is\b)\b)/gi;
+  cleaned = cleaned.replace(ampBeforeStructure, ' ');
+
+  // Orphan "&" after commas / before sentence (empty first slot): "We, & Name2"
+  cleaned = cleaned.replace(/,\s*&\s+/g, ', ');
+  cleaned = cleaned.replace(/\(\s*&\s+/g, '(');
 
   // Remove "Late ;", "Late ,", trailing "Late", orphaned "Late &"
   cleaned = cleaned.replace(/\bLate\s*[,;]\s*/gi, '');
@@ -74,7 +97,6 @@ const cleanFormattedListText = (text) => {
   cleaned = cleaned.replace(/\s+on\s+(?=without\b)/gi, ' ');
 
   // Collapse / strip leftover semicolons from empty name slots: "; ;", ";;", "; are"
-  let prev;
   do {
     prev = cleaned;
     cleaned = cleaned.replace(/;\s*;/g, ';');
@@ -134,8 +156,30 @@ const cleanFormattedListText = (text) => {
   cleaned = cleaned.replace(/\s+or\s*$/gi, '');
   cleaned = cleaned.replace(/^\.\s*$/g, '');
 
-  // Collapse whitespace
-  cleaned = cleaned.replace(/\s{2,}/g, ' ').trim();
+  // Remove empty numbered list slots left by missing joint holders:
+  // "1. Ramesh 2.  3." or "1. Ramesh2. 3." → "1. Ramesh"
+  do {
+    prev = cleaned;
+    cleaned = cleaned.replace(/\d+\.\s*(?=\d+\.)/g, '');
+    cleaned = cleaned.replace(/(?:^|\s)\d+\.\s*$/g, '');
+    cleaned = cleaned.replace(/([A-Za-z0-9\)])\d+\.\s*$/g, '$1');
+  } while (cleaned !== prev);
+
+  // Preserve intentional multi-space gaps on form/signature/date lines
+  // (e.g. "on this      day of        , 2026          (DEPONENT)")
+  const isLayoutLine =
+    /\b(day\s+of|deponent|solemnly\s+affirm|signature|witness)\b/i.test(cleaned) ||
+    /_{3,}/.test(cleaned) ||
+    /\bon\s+this\b/i.test(cleaned);
+
+  if (isLayoutLine) {
+    // Keep internal spacing; only trim edges and curb extreme leftover runs
+    cleaned = cleaned.replace(/[ \t]+$/g, '').replace(/^[ \t]+/g, '');
+    cleaned = cleaned.replace(/ {25,}/g, '                    ');
+  } else {
+    // Normal paragraphs: collapse whitespace
+    cleaned = cleaned.replace(/\s{2,}/g, ' ').trim();
+  }
 
   // I/We: multiple names (comma or &) → We, single → I
   if (/\bI\/We\b/i.test(cleaned)) {
@@ -178,21 +222,82 @@ const getRowTextWithoutListPrefix = (rowContent) => {
 };
 
 /**
+ * Signature-mark placeholders left in Annexure-E / similar heir tables (e.g. "X").
+ * These must not keep an otherwise-empty numbered heir row visible.
+ */
+const isSignaturePlaceholderOnly = (text) => {
+  const t = String(text || '').trim();
+  if (!t) return true;
+  return /^(x|✓|✔|☑|☐|□|■|_+|-+|\.+)$/i.test(t);
+};
+
+const isBlankHeirCell = (text) =>
+  isEmptyOrSeparatorOnly(text) || isSignaturePlaceholderOnly(text);
+
+/**
  * True when a table row only has list numbering (e.g. "4)") with no heir data.
+ * Signature column may still contain a static "X" mark — treat that as empty.
  */
 const isNumberedEmptyHeirRow = (rowContent) => {
   const cells = [...rowContent.matchAll(/(<w:tc(?:\s[^>]*)?>)([\s\S]*?)(<\/w:tc>)/g)];
   if (cells.length === 0) return false;
 
   const cellTexts = cells.map((c) => getRowText(c[2]).trim());
-  const firstWithoutNum = cellTexts[0].replace(/^\d+\)\s*/, '').trim();
+  // "3) Name" / "3)" / "(3)" → strip leading list number
+  const firstWithoutNum = cellTexts[0]
+    .replace(/^\s*\(?\d{1,2}\)?\s*[).:-]?\s*/, '')
+    .trim();
 
-  const otherCellsEmpty = cellTexts.slice(1).every((t) => isEmptyOrSeparatorOnly(t));
+  const otherCellsEmpty = cellTexts.slice(1).every((t) => isBlankHeirCell(t));
   const firstEmpty =
-    isEmptyOrSeparatorOnly(firstWithoutNum) ||
-    /^\d+\)?\s*$/.test(cellTexts[0]);
+    isBlankHeirCell(firstWithoutNum) ||
+    /^\(?\d{1,2}\)?\s*[).:-]?\s*$/.test(cellTexts[0]);
+
+  // Only treat as heir/signature list rows (2–4 cols), not securities headers
+  if (cells.length < 2 || cells.length > 4) return false;
+  const joined = cellTexts.join(' ').toLowerCase();
+  if (/company\s*name|folio|securities\s*held|certificate\s*no|distinctive/i.test(joined)) {
+    return false;
+  }
 
   return firstEmpty && otherCellsEmpty;
+};
+
+/**
+ * Strip leading roman-numeral list markers: "i)", "ii)", "iii)", "iv)", "(iii)"
+ */
+const stripRomanListPrefix = (text) =>
+  String(text || '')
+    .replace(/^\s*\(?[ivx]{1,4}\)?\s*[).:-]?\s*/i, '')
+    .trim();
+
+/**
+ * ISR-2 Bank Joint (and similar): 2-column Account holder PAN | Name rows.
+ * After population, empty claimants leave only "iii)" / "iv)" labels — remove those rows.
+ * Keep rows that still have a PAN or name after the roman prefix.
+ */
+const isEmptyAccountHolderPanNameRow = (rowContent) => {
+  const cells = [...rowContent.matchAll(/(<w:tc(?:\s[^>]*)?>)([\s\S]*?)(<\/w:tc>)/g)];
+  if (cells.length < 2 || cells.length > 3) return false;
+
+  const cellTexts = cells.map((c) => getRowText(c[2]).trim());
+  const joined = cellTexts.join(' ');
+
+  // Do not touch header / photo / other section rows
+  if (/account\s*holder|photograph|bank\s*records|signature|folio|company/i.test(joined)) {
+    return false;
+  }
+
+  const hasRomanMarker = cellTexts.some((t) =>
+    /^\s*\(?[ivx]{1,4}\)?\s*[).:]/i.test(t) || /^\s*[ivx]{1,4}\)\s*$/i.test(t)
+  );
+  if (!hasRomanMarker) return false;
+
+  // Every cell is empty once roman list prefixes are removed
+  return cellTexts.every((t) => {
+    const stripped = stripRomanListPrefix(t);
+    return isEmptyOrSeparatorOnly(stripped);
+  });
 };
 
 /**
@@ -267,15 +372,51 @@ const isEmptySecuritiesDataRow = (rowContent) => {
  */
 const removeEmptyTableRows = (xml) => {
   return xml.replace(/<w:tr(?:\s[^>]*)?>([\s\S]*?)<\/w:tr>/g, (fullMatch, rowContent) => {
+    // Preserve rows containing images, drawings, shapes, or textboxes
+    if (/<w:(?:drawing|pict|object|txbxContent)/i.test(rowContent) || /<v:(?:shape|rect|textbox|group|line)/i.test(rowContent) || /<mc:AlternateContent/i.test(rowContent)) {
+      return fullMatch;
+    }
+
     const rowText = getRowText(rowContent);
     if (
       isEmptyOrSeparatorOnly(rowText) ||
       isNumberedEmptyHeirRow(rowContent) ||
+      isEmptyAccountHolderPanNameRow(rowContent) ||
       isEmptySecuritiesDataRow(rowContent)
     ) {
       return '';
     }
     return fullMatch;
+  });
+};
+
+/**
+ * After empty numbered heir rows are removed, renumber remaining "1)", "4)" → "1)", "2)".
+ * Applies to Annexure-E style Legal Heir / Signature tables only.
+ */
+const renumberLegalHeirTableRows = (xml) => {
+  return xml.replace(/<w:tbl\b[^>]*>[\s\S]*?<\/w:tbl>/g, (table) => {
+    const tableText = getRowText(table).toLowerCase();
+    if (!/legal\s*heir/.test(tableText)) return table;
+
+    let counter = 0;
+    return table.replace(/<w:tr\b[^>]*>[\s\S]*?<\/w:tr>/g, (row) => {
+      const rowText = getRowText(row);
+      if (/name\s*(of\s*the\s*)?legal\s*heir|signature\s*of\s*the\s*legal|address\s*and\s*contact|relationship\s*with/i.test(rowText)) {
+        return row;
+      }
+      if (!/^\s*\d{1,2}\s*\)/.test(rowText)) return row;
+
+      counter += 1;
+      let replaced = false;
+      return row.replace(/<w:t([^>]*)>([^<]*)<\/w:t>/g, (tm, attrs, text) => {
+        if (replaced) return tm;
+        if (!/^\s*\d{1,2}\s*\)/.test(text)) return tm;
+        replaced = true;
+        const next = text.replace(/^\s*\d{1,2}\s*\)/, `${counter})`);
+        return `<w:t${attrs}>${next}</w:t>`;
+      });
+    });
   });
 };
 
@@ -291,7 +432,33 @@ const runUsesSymbolFont = (runXml) =>
  */
 const cleanParagraphsInXml = (xml) => {
   return xml.replace(/<w:p(?:\s[^>]*)?>([\s\S]*?)<\/w:p>/g, (fullMatch, pContent) => {
-    
+    // Extract visible paragraph text once for layout detection
+    const paraTexts = [];
+    const paraTRegex = /<w:t[^>]*>([^<]*)<\/w:t>/g;
+    let paraMatch;
+    while ((paraMatch = paraTRegex.exec(pContent)) !== null) {
+      paraTexts.push(decodeXmlText(paraMatch[1]));
+    }
+    const paraFullText = paraTexts.join('');
+
+    // Date / signature lines that use tabs or multi-space blanks — do not merge/collapse
+    // (preserves "on this ____ day of ____ , 2026" and DEPONENT alignment)
+    const hasTabs = /<w:tab[\s/>]/i.test(pContent);
+    const isLayoutPara =
+      (hasTabs || / {3,}/.test(paraFullText) || /\u00A0{2,}/.test(paraFullText)) &&
+      /\b(day\s+of|deponent|solemnly\s+affirm|on\s+this)\b/i.test(paraFullText);
+    if (isLayoutPara) {
+      // Light cleanup only: strip undefined/null leftovers inside text nodes
+      if (!/undefined|null/i.test(paraFullText)) {
+        return fullMatch;
+      }
+      let light = pContent.replace(/<w:t([^>]*)>([^<]*)<\/w:t>/g, (tm, attrs, text) => {
+        const cleaned = decodeXmlText(text).replace(/undefined|null/gi, '');
+        return `<w:t${attrs}>${escapeXmlText(cleaned)}</w:t>`;
+      });
+      return fullMatch.replace(pContent, light);
+    }
+
     // Extract all runs
     const runs = [...pContent.matchAll(/(<w:r(?:\s[^>]*)?>)([\s\S]*?)(<\/w:r>)/g)];
     if (runs.length === 0) return fullMatch;
@@ -361,44 +528,66 @@ const cleanParagraphsInXml = (xml) => {
         continue;
       }
       
-      // Normal segment - extract all text, clean it, and place it in the first run containing text
+      // Normal segment - extract all text, clean it, and place it in the best body-text run
+      // (not a whitespace-only / oversized run — that caused ISR-1 "cancelled cheque" to print huge)
       let textParts = [];
       let targetRunIdx = -1;
-      
+      let bestScore = -Infinity;
+
       for (let i = 0; i < segment.length; i++) {
+        const runFull = segment[i][0];
         const runInner = segment[i][2];
         const tRegex = /<w:t[^>]*>([^<]*)<\/w:t>/g;
         let match;
-        let hasText = false;
+        let runText = '';
+        let hasTextNode = false;
         while ((match = tRegex.exec(runInner)) !== null) {
-          textParts.push(decodeXmlText(match[1]));
-          hasText = true;
+          runText += decodeXmlText(match[1]);
+          hasTextNode = true;
         }
-        if (hasText && targetRunIdx === -1) {
-          targetRunIdx = i; // First run with text
+        if (!hasTextNode) continue;
+        textParts.push(runText);
+
+        const meaningful = runText.trim().length > 0;
+        const szMatch = runFull.match(/<w:sz(?:Cs)? w:val="(\d+)"/i);
+        const sz = szMatch ? parseInt(szMatch[1], 10) : 24;
+        // Prefer real words; prefer ~12pt (sz 24); heavily penalize space-only / huge decorative runs
+        let score = meaningful ? 1000 : 0;
+        score += Math.max(0, 40 - Math.abs(sz - 24));
+        if (!meaningful) score -= 200;
+        if (sz >= 36) score -= 80;
+        if (score > bestScore) {
+          bestScore = score;
+          targetRunIdx = i;
         }
       }
-      
+
       if (textParts.length === 0 || targetRunIdx === -1) continue;
-      
+
       const fullText = textParts.join('');
       const cleanedFull = cleanFormattedListText(fullText);
       const normalizeWhitespace = (str) => str.replace(/\s+/g, ' ').trim();
       if (normalizeWhitespace(fullText) === normalizeWhitespace(cleanedFull)) continue;
-      
+
       const escaped = escapeXmlText(cleanedFull);
-      
+
       for (let i = 0; i < segment.length; i++) {
         const runMatch = segment[i];
         const runFull = runMatch[0];
         const runOpen = runMatch[1];
         const runInner = runMatch[2];
         const runClose = runMatch[3];
-        
+
         if (!/<w:t[\s>]/.test(runInner)) continue;
-        
+
         if (i === targetRunIdx) {
           let replaced = false;
+          // Ensure body text is not left on an oversized run (half-points: 24 = 12pt)
+          let normalizedOpen = runOpen.replace(
+            /(<w:sz(?:Cs)?\s+w:val=")(\d+)(")/gi,
+            (m, a, val, c) => (parseInt(val, 10) >= 36 ? `${a}24${c}` : m)
+          );
+          // If no sz on run but cleaned text is long body copy, leave as-is
           const updatedInner = runInner.replace(/<w:t([^>]*)>([^<]*)<\/w:t>/g, (_tm, attrs) => {
             if (replaced) return `<w:t${attrs}></w:t>`;
             replaced = true;
@@ -407,7 +596,7 @@ const cleanParagraphsInXml = (xml) => {
             if (spaceAttr && !/xml:space=/.test(newAttrs)) newAttrs += spaceAttr;
             return `<w:t${newAttrs}>${escaped}</w:t>`;
           });
-          newPContent = newPContent.replace(runFull, runOpen + updatedInner + runClose);
+          newPContent = newPContent.replace(runFull, normalizedOpen + updatedInner + runClose);
         } else {
           // Clear text from other runs in this segment to avoid duplicates
           const clearedInner = runInner.replace(/<w:t([^>]*)>([^<]*)<\/w:t>/g, (_tm, attrs) => `<w:t${attrs}></w:t>`);
@@ -437,10 +626,24 @@ const removeTrailingEmptyTableColumns = (xml) => {
     if (maxCols <= 1) return tableMatch;
 
     let trailingEmptyCols = 0;
-    for (let colIdx = maxCols - 1; colIdx >= 0; colIdx--) {
+    for (let colIdx = maxCols - 1; colIdx >= 1; colIdx--) {
+      // Never strip the first column (usually row labels: Name, PIN, S.No., etc.)
       const allEmptyInCol = cellMatrix.every((row) => {
         if (colIdx >= row.length) return true;
-        return isEmptyOrSeparatorOnly(row[colIdx].text);
+
+        // Check if the cell contains media (images, drawings, shapes)
+        const hasMedia =
+          /<w:(?:drawing|pict|object|txbxContent)/i.test(row[colIdx].content) ||
+          /<v:(?:shape|rect|textbox|group|line)/i.test(row[colIdx].content) ||
+          /<mc:AlternateContent/i.test(row[colIdx].content);
+        if (hasMedia) return false;
+
+        const t = String(row[colIdx].text || '').trim();
+        if (isEmptyOrSeparatorOnly(t)) return true;
+        // ISR-1 signature table: "Holder 2" / "Holder 3" headers count as empty
+        // when that holder has no name/address/PIN data in the column.
+        if (/^holder\s*\d+$/i.test(t)) return true;
+        return false;
       });
       if (allEmptyInCol && colIdx === maxCols - 1 - trailingEmptyCols) {
         trailingEmptyCols++;
@@ -479,14 +682,358 @@ const removeTrailingEmptyTableColumns = (xml) => {
 };
 
 /**
+ * Remove empty paragraphs for Non-Claimants and Deponents.
+ */
+const removeEmptyNonClaimantRows = (xml) => {
+  return xml.replace(/<w:p(?:\s[^>]*)?>([\s\S]*?)<\/w:p>/g, (fullMatch, pContent) => {
+    // Extract text from the paragraph
+    const texts = [];
+    const tRegex = /<w:t[^>]*>([^<]*)<\/w:t>/g;
+    let match;
+    while ((match = tRegex.exec(pContent)) !== null) {
+      texts.push(decodeXmlText(match[1]));
+    }
+    const fullText = texts.join('').trim();
+    
+    // Match empty Non-Claimant lines, e.g., "Name of the Non-Claimant-2: Sign-2 X _____"
+    if (/^Name of the Non-Claimant-\d+:\s*(?:Sign-\d+\s*X?\s*_*)?$/i.test(fullText) || 
+        /^Name of the Non-Claimant-\d+:\s*$/i.test(fullText)) {
+      return '';
+    }
+    
+    // Match empty Deponent lines that have literal "(2)" text
+    if (/^\(\d+\)\s*$/.test(fullText)) {
+      return '';
+    }
+    
+    // Check for Word auto-numbered list items that have NO text content
+    // These render as empty "(2)", "(3)", etc. if the placeholder was removed
+    const hasMedia = /<w:(?:drawing|pict|object|txbxContent)/i.test(pContent) || 
+                     /<v:(?:shape|rect|textbox|group|line)/i.test(pContent) || 
+                     /<mc:AlternateContent/i.test(pContent);
+                     
+    if (fullText === '' && /<w:numPr>/i.test(pContent) && !hasMedia) {
+      return '';
+    }
+    
+    return fullMatch;
+  });
+};
+
+/**
+ * Clamp oversized body-run font sizes (half-points >= 36 / 18pt+) on non-symbol runs.
+ * Prevents spacer runs (sz=40) from making merged paragraph text print huge after cleanup.
+ */
+const normalizeOversizedBodyFonts = (xml) => {
+  return xml.replace(/<w:r\b[^>]*>[\s\S]*?<\/w:r>/g, (run) => {
+    if (runUsesSymbolFont(run)) return run;
+    return run.replace(/(<w:sz(?:Cs)?\s+w:val=")(\d+)(")/gi, (m, a, val, c) => {
+      const n = parseInt(val, 10);
+      return n >= 36 ? `${a}24${c}` : m;
+    });
+  });
+};
+
+/**
+ * True for Form-B indemnity docs that use page-relative floating signature/address boxes.
+ */
+const isFormBIndemnityXml = (xml) =>
+  /INDEMNITY/i.test(xml || '') &&
+  (/Form\s*-?\s*B/i.test(xml || '') || /Signature of All holder/i.test(xml || ''));
+
+/**
+ * Form-B templates accidentally contain `strokecolor="black [3040]"` inside VML.
+ * With `[`/`]` delimiters, docxtemplater treats `[3040]` as a tag and corrupts drawings
+ * (Word "unreadable content" / floating boxes jumping onto body text).
+ */
+const sanitizeTemplateXmlArtifacts = (xml) => {
+  if (!xml) return xml;
+  let result = xml
+    .replace(/strokecolor="black\s*\[3040\]"/gi, 'strokecolor="black"')
+    .replace(/strokecolor="([^"]*?)\s*\[3040\]"/gi, 'strokecolor="$1"');
+  result = fixIEPFIndemnityBondLayout(result);
+  return result;
+};
+
+/**
+ * IndemnityBond_IEPF_* templates put key fields in floating textboxes on a
+ * multi-column / continuous-section layout. docx-preview then shows only the
+ * address header (body appears blank) even when data maps. Move placeholders
+ * into body flow, drop those floats, collapse continuous sections, and force
+ * a normal single-column page.
+ */
+const fixIEPFIndemnityBondLayout = (xml) => {
+  if (!xml) return xml;
+  const isIEPFBond =
+    /Investor Education and Protection Fund Authority/i.test(xml) &&
+    (/Indemnity Bond/i.test(xml) || /\[Total Dividend Amount\]/i.test(xml) || /\[Total Shares\]/i.test(xml));
+  if (!isIEPFBond) return xml;
+
+  let result = xml;
+  const isMultiple =
+    /\[Name as per PAN C2\]/i.test(xml) || /\[Father Name C2\]/i.test(xml);
+
+  const bodyPlain = (docXml) => {
+    const sans = docXml.replace(/<w:txbxContent[\s\S]*?<\/w:txbxContent>/g, '');
+    return [...sans.matchAll(/<w:t[^>]*>([^<]*)<\/w:t>/g)].map((m) => m[1]).join('');
+  };
+
+  const normalizeSectPr = (sect) => {
+    let s = sect.replace(/<w:cols\b[^>]*>[\s\S]*?<\/w:cols>/gi, '<w:cols w:space="720"/>');
+    s = s.replace(/<w:cols\b[^/]*\/>/gi, '<w:cols w:space="720"/>');
+    s = s.replace(/<w:type\s+w:val="continuous"\s*\/>/gi, '');
+    s = s.replace(/<w:pgSz\b[^>]*\/?>/gi, '<w:pgSz w:w="12240" w:h="15840"/>');
+    return s;
+  };
+
+  // Continuous section breaks were used for the float/column layout. After we
+  // flatten to one column, intermediate sectPr make docx-preview show only the
+  // first section (address + title) and hide the bond body.
+  const sectMatches = [...result.matchAll(/<w:sectPr\b[^>]*>[\s\S]*?<\/w:sectPr>/gi)];
+  if (sectMatches.length > 1) {
+    let seen = 0;
+    const total = sectMatches.length;
+    result = result.replace(/<w:sectPr\b[^>]*>[\s\S]*?<\/w:sectPr>/gi, (sect) => {
+      seen += 1;
+      if (seen < total) return '';
+      return normalizeSectPr(sect);
+    });
+  } else {
+    result = result.replace(/<w:sectPr\b[^>]*>[\s\S]*?<\/w:sectPr>/gi, normalizeSectPr);
+  }
+
+  // Clean empty paragraph properties left after removing intermediate sectPr
+  result = result.replace(/<w:pPr>\s*<\/w:pPr>/g, '');
+
+  let plain = bodyPlain(result);
+
+  // "Rs" → include dividend amount in body flow
+  if (!/Rs\s*\[Total Dividend Amount\]/i.test(plain)) {
+    const next = result.replace(/(<w:t[^>]*>)Rs(<\/w:t>)/, '$1Rs [Total Dividend Amount] $2');
+    if (next !== result) {
+      result = next;
+      plain = bodyPlain(result);
+    }
+  }
+
+  // "shares" … "being" → include share count
+  if (!/shares\s*\[Total Shares\]/i.test(plain)) {
+    const next = result.replace(
+      /(<w:t[^>]*>)shares(<\/w:t>)([\s\S]{0,500}?<w:t[^>]*>)being(<\/w:t>)/i,
+      '$1shares [Total Shares] $2$3being$4'
+    );
+    if (next !== result) {
+      result = next;
+      plain = bodyPlain(result);
+    }
+  }
+
+  // Base IEPF template has neither year nor company in body (only in floats)
+  if (!/\[Financial Dividend Year\]/i.test(plain)) {
+    const next = result.replace(
+      /(Financial Year <\/w:t>)(<\/w:r>)/i,
+      '$1$2<w:r><w:t>[Financial Dividend Year]</w:t></w:r><w:r><w:t xml:space="preserve"> </w:t></w:r><w:r><w:t>[Company Name]</w:t></w:r>'
+    );
+    if (next !== result) {
+      result = next;
+      plain = bodyPlain(result);
+    }
+  }
+
+  // After Financial Dividend Year → Company Name
+  if (!/\[Company Name\]/i.test(plain)) {
+    const next = result.replace(
+      /(Financial Dividend Year\]<\/w:t>)(<\/w:r>)/i,
+      '$1$2<w:r><w:t xml:space="preserve"> </w:t></w:r><w:r><w:t>[Company Name]</w:t></w:r>'
+    );
+    if (next !== result) {
+      result = next;
+      plain = bodyPlain(result);
+    }
+  }
+
+  // Before "out of the Investor" → claimant PAN name(s)
+  if (!/\[Name as per PAN C1\]/i.test(plain)) {
+    const nameInsert = isMultiple
+      ? '[Name as per PAN C1] &amp; [Name as per PAN C2] &amp; [Name as per PAN C3] '
+      : '[Name as per PAN C1] ';
+    const next = result.replace(/(<w:t[^>]*>)out(<\/w:t>)/i, `$1${nameInsert}out$2`);
+    if (next !== result) {
+      const probe = bodyPlain(next);
+      if (/\[Name as per PAN C1\][\s\S]{0,80}?out\s*of/i.test(probe)) {
+        result = next;
+        plain = probe;
+      }
+    }
+  }
+
+  // Remove floating boxes that only carry mapped placeholders (or empty leftovers)
+  result = result.replace(/<mc:AlternateContent>[\s\S]*?<\/mc:AlternateContent>/g, (block) => {
+    const text = [...block.matchAll(/<w:t[^>]*>([^<]*)<\/w:t>/g)].map((m) => m[1]).join('');
+    const stripped = text
+      .replace(/\[Total Shares\]/gi, '')
+      .replace(/\[Total Dividend Amount\]/gi, '')
+      .replace(/\[Company Name\]/gi, '')
+      .replace(/\[Financial Dividend Year\]/gi, '')
+      .replace(/\[Name as per PAN C[123]\]/gi, '')
+      .replace(/&amp;/gi, '')
+      .replace(/&/g, '')
+      .replace(/\s+/g, '');
+    const isPlaceholderFloat =
+      /Total Shares|Total Dividend Amount|Company Name|Financial Dividend Year|Name as per PAN C/i.test(
+        text
+      );
+    if (stripped === '' && (isPlaceholderFloat || /wp:anchor|w:txbxContent|v:textbox/i.test(block))) {
+      return '';
+    }
+    return block;
+  });
+
+  // Extreme negative character spacing collapses body text in browser preview
+  result = result.replace(/<w:spacing\s+w:val="-\d+"\s*\/>/g, '');
+
+  result = result.replace(/<w:drawing>\s*<\/w:drawing>/g, '');
+  result = result.replace(/<w:r\b[^>]*>\s*<\/w:r>/g, '');
+
+  return result;
+};
+
+/**
+ * After empty securities rows are removed, Form-B page-1 shortens and absolute
+ * signature/address anchors land on page 1 over the intro paragraph.
+ * Force the witness / signature block onto a fresh page.
+ */
+const ensureFormBWitnessPageBreak = (xml) => {
+  if (!isFormBIndemnityXml(xml) || !/IN WITNESS WHEREOF/i.test(xml)) {
+    return xml;
+  }
+
+  return xml.replace(
+    /(<w:p\b[^>]*>)((?:<w:pPr\b[^>]*>[\s\S]*?<\/w:pPr>)?)([\s\S]*?)(<w:t\b[^>]*>)(IN WITNESS WHEREOF)/i,
+    (full, open, pPr, mid, tOpen, witness) => {
+      if (/<w:br\b[^>]*w:type="page"/i.test(full)) {
+        return full;
+      }
+      return `${open}${pPr || ''}<w:r><w:br w:type="page"/></w:r>${mid}${tOpen}${witness}`;
+    }
+  );
+};
+
+/**
+ * Form-B signature/address/office boxes are wp:anchor floats with relativeFrom=page.
+ * Even after a page break, Word still paints them over the intro paragraph when the
+ * body is short. Convert those layout boxes to inline so they flow with the witness
+ * section, and drop zero-size decorative absolute lines.
+ *
+ * Important: never leave empty <w:drawing></w:drawing> (Word "unreadable content").
+ */
+const defloatFormBLayoutAnchors = (xml) => {
+  if (!isFormBIndemnityXml(xml)) return xml;
+
+  const anchorText = (inner) =>
+    [...inner.matchAll(/<w:t[^>]*>([^<]*)<\/w:t>/g)].map((m) => m[1]).join('');
+
+  const isLayoutBoxText = (text) =>
+    /Signature of All holder|Address of First Holder|FOR OFFICE/i.test(text || '');
+
+  const isDecorativeAnchorInner = (inner) => {
+    const text = anchorText(inner);
+    return !text.trim() && /<wp:extent\b[^>]*(?:cx="0"|cy="0")/i.test(inner);
+  };
+
+  const anchorToInline = (inner) => {
+    const extent =
+      (inner.match(/<wp:extent\b[^>]*\/>/) || ['<wp:extent cx="3127375" cy="1066800"/>'])[0];
+    const docPr =
+      (inner.match(/<wp:docPr\b[^>]*\/>/) || ['<wp:docPr id="1" name="TextBox"/>'])[0];
+    const cNv =
+      (inner.match(/<wp:cNvGraphicFramePr>[\s\S]*?<\/wp:cNvGraphicFramePr>/) || [''])[0];
+    const graphic = (inner.match(/<a:graphic\b[\s\S]*?<\/a:graphic>/) || [''])[0];
+    if (!graphic) return null;
+    return `<wp:inline distT="0" distB="0" distL="114300" distR="114300">${extent}${docPr}${cNv}${graphic}</wp:inline>`;
+  };
+
+  // Prefer operating on AlternateContent so Choice+Fallback stay consistent
+  let result = xml.replace(/<mc:AlternateContent>([\s\S]*?)<\/mc:AlternateContent>/g, (block) => {
+    const anchorMatch = block.match(/<wp:anchor\b[^>]*>([\s\S]*?)<\/wp:anchor>/);
+    if (!anchorMatch) return block;
+
+    const inner = anchorMatch[1];
+    if (isDecorativeAnchorInner(inner)) {
+      return '';
+    }
+
+    const text = anchorText(inner);
+    if (!isLayoutBoxText(text)) return block;
+
+    const inline = anchorToInline(inner);
+    if (!inline) return block;
+
+    // Plain drawing — avoid Choice-without-Fallback (Word may flag unreadable content)
+    return `<w:drawing>${inline}</w:drawing>`;
+  });
+
+  // Any remaining bare anchors (not wrapped in AlternateContent)
+  result = result.replace(/<wp:anchor\b[^>]*>([\s\S]*?)<\/wp:anchor>/g, (full, inner) => {
+    if (isDecorativeAnchorInner(inner)) return '';
+    if (!isLayoutBoxText(anchorText(inner))) return full;
+    return anchorToInline(inner) || full;
+  });
+
+  // Remove empty drawings / empty AlternateContent left after decorative deletion
+  result = result.replace(/<w:drawing>\s*<\/w:drawing>/g, '');
+  result = result.replace(
+    /<mc:AlternateContent>\s*<mc:Choice\b[^>]*>\s*<\/mc:Choice>\s*(?:<mc:Fallback\b[^>]*>[\s\S]*?<\/mc:Fallback>)?\s*<\/mc:AlternateContent>/g,
+    ''
+  );
+  result = result.replace(
+    /<mc:AlternateContent>\s*<mc:Choice\b[^>]*>\s*<w:drawing>\s*<\/w:drawing>\s*<\/mc:Choice>[\s\S]*?<\/mc:AlternateContent>/g,
+    ''
+  );
+  // Empty runs that only held a removed drawing
+  result = result.replace(/<w:r\b[^>]*>\s*<\/w:r>/g, '');
+
+  return result;
+};
+
+/**
+ * Sanitize zip XML before Docxtemplater parses `[...]` tags.
+ */
+const sanitizeTemplateZip = (zip) => {
+  const xmlFiles = Object.keys(zip.files).filter((f) =>
+    /^word\/(document|header\d*|footer\d*)\.xml$/.test(f)
+  );
+
+  xmlFiles.forEach((filePath) => {
+    const file = zip.files[filePath];
+    if (!file) return;
+    const content = file.asText();
+    const cleaned = sanitizeTemplateXmlArtifacts(content);
+    if (cleaned !== content) {
+      zip.file(filePath, cleaned);
+    }
+  });
+
+  return zip;
+};
+
+/**
  * Post-process document XML after docxtemplater render.
  */
 const postProcessDocumentXml = (xml) => {
   let result = xml;
+  result = sanitizeTemplateXmlArtifacts(result);
   result = result.replace(/undefined|null/gi, '');
+  result = normalizeOversizedBodyFonts(result);
   result = cleanParagraphsInXml(result); // Re-enabled with segmented logic to preserve formatting
   result = removeEmptyTableRows(result);
+  result = renumberLegalHeirTableRows(result);
   result = removeTrailingEmptyTableColumns(result);
+  result = removeEmptyNonClaimantRows(result);
+  // Form-B: remove empty securities rows, then keep signature/address boxes from
+  // overlaying page-1 body text (page break + convert floats to inline).
+  result = ensureFormBWitnessPageBreak(result);
+  result = defloatFormBLayoutAnchors(result);
   return result;
 };
 
@@ -520,8 +1067,13 @@ module.exports = {
   decodeXmlText,
   escapeXmlText,
   isEmptyOrSeparatorOnly,
+  isEmptyAccountHolderPanNameRow,
   removeEmptyTableRows,
   removeTrailingEmptyTableColumns,
+  sanitizeTemplateXmlArtifacts,
+  sanitizeTemplateZip,
+  ensureFormBWitnessPageBreak,
+  defloatFormBLayoutAnchors,
   postProcessDocumentXml,
   postProcessDocxZip,
 };

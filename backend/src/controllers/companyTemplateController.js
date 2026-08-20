@@ -6,7 +6,7 @@ const Docxtemplater = require('docxtemplater');
 const PizZip = require('pizzip');
 const { COMPANY_WORKFLOW_STATUS } = require('../utils/reviewAssignment');
 const { recordCompanyStatusChange } = require('../utils/companyStatusHistory');
-const { postProcessDocxZip, cleanFormattedListText } = require('../utils/templateDocumentUtils');
+const { postProcessDocxZip, cleanFormattedListText, sanitizeTemplateZip } = require('../utils/templateDocumentUtils');
 
 // Utility function to clean undefined values from any object
 const cleanUndefinedValues = (obj) => {
@@ -511,7 +511,17 @@ const mapCompanyValuesToTemplate = async (companyId, templatePath) => {
                            cv.caseField.field_label.match(/c\s*(\d+)/i);
         
         if (isNameAsPerPan) {
-          if (panMatch) {
+          // LH / H suffixes are not claimant C-numbers — never treat as "no suffix → C1"
+          const hasLhOrHSuffix =
+            /\blh\s*\d+\b/i.test(key) ||
+            /\blh\s*\d+\b/i.test(label) ||
+            (/\bh\d+\b/i.test(key) && !/\bc\d+\b/i.test(key)) ||
+            (/\bh\d+\b/i.test(label) && !/\bc\d+\b/i.test(label));
+
+          if (hasLhOrHSuffix) {
+            // Keep exact LH/H key only; do not pollute C1
+            if (!valueMap[cv.caseField.field_key]) valueMap[cv.caseField.field_key] = cv.field_value;
+          } else if (panMatch) {
             // Has C number suffix (e.g., "Name as per PAN C1")
             const suffix = panMatch[1];
             const fieldKey = `Name as per PAN C${suffix}`;
@@ -600,8 +610,13 @@ const mapCompanyValuesToTemplate = async (companyId, templatePath) => {
           console.log(`✅ Mapped Name as per DC H${suffix} from key "${cv.caseField.field_key}": ${cv.field_value}`);
         }
         
-        // Claimant Relation H3
-        if ((key.includes('claimant relation') || key.includes('relation')) && key.match(/h\d+$/i)) {
+        // Claimant Relation H3 (do not treat legal-heir "Relation LH1" as holder H1)
+        if (
+          (key.includes('claimant relation') ||
+            (key.includes('relation') && !key.includes('deceased relation') && !/\blh\s*\d+\b/i.test(key))) &&
+          key.match(/h\d+$/i) &&
+          !/\blh\s*\d+\b/i.test(key)
+        ) {
           const suffix = key.match(/h(\d+)$/i)[1];
           const fieldKey = `Claimant Relation H${suffix}`;
           if (!valueMap[fieldKey]) valueMap[fieldKey] = cv.field_value;
@@ -635,19 +650,20 @@ const mapCompanyValuesToTemplate = async (companyId, templatePath) => {
         }
         
         // Handle address fields dynamically - CRITICAL FIX: Ensure Address C1 maps to claimant address, not bank address
-        if (key.includes('address c') && key.match(/c\d+$/)) {
-          const suffix = key.match(/c(\d+)$/)[1];
+        // Do NOT treat "Address Contact C1" as "Address C1"
+        if (
+          (key.match(/^address\s*c\d+$/i) || key.match(/^address_c\d+$/i)) &&
+          !key.includes('bank') &&
+          !key.includes('contact') &&
+          !key.includes('old')
+        ) {
+          const suffix = key.match(/c(\d+)$/i)[1];
           const fieldKey = `Address C${suffix}`;
-          
-          // CRITICAL: Only map if this is NOT a bank address field
-          // Bank addresses should be mapped to "Bank Address C1", not "Address C1"
-          if (!key.includes('bank') && !key.includes('Bank')) {
-            if (!valueMap[fieldKey]) valueMap[fieldKey] = cv.field_value;
-            if (!valueMap[`address_c${suffix}`]) valueMap[`address_c${suffix}`] = cv.field_value;
-            console.log(`✅ Mapped claimant address for ${fieldKey}: ${cv.field_value}`);
-          } else {
-            console.log(`⚠️ Skipping bank address mapping for ${fieldKey}: ${cv.field_value}`);
-          }
+          if (!valueMap[fieldKey]) valueMap[fieldKey] = cv.field_value;
+          if (!valueMap[`address_c${suffix}`]) valueMap[`address_c${suffix}`] = cv.field_value;
+          console.log(`✅ Mapped claimant address for ${fieldKey}: ${cv.field_value}`);
+        } else if (key.includes('address c') && key.match(/c\d+$/) && (key.includes('bank') || key.includes('Bank'))) {
+          console.log(`⚠️ Skipping bank address mapping for Address: ${cv.field_value}`);
         }
         
         // Handle PAN fields dynamically
@@ -1142,9 +1158,11 @@ const mapCompanyValuesToTemplate = async (companyId, templatePath) => {
     // Find all unique H numbers from the valueMap and allHFields
     const holderNumbers = new Set();
     Object.keys(valueMap).forEach(key => {
-      const match = key.match(/[hH](\d+)$/);
-      if (match) {
-        holderNumbers.add(match[1]);
+      // Prefer explicit holder keys (H1) over legal-heir keys (LH1)
+      const holderMatch = key.match(/(?:^|[\s_])H(\d+)$/i) || key.match(/\bH(\d+)$/i);
+      const lhMatch = key.match(/\bLH(\d+)$/i);
+      if (holderMatch && !lhMatch) {
+        holderNumbers.add(holderMatch[1]);
       }
     });
     // Also add from allHFields
@@ -1154,6 +1172,13 @@ const mapCompanyValuesToTemplate = async (companyId, templatePath) => {
         holderNumbers.add(match[1]);
       }
     });
+    // Template filename like "..._H4_Template.docx" must always include that holder
+    const templateHolderMatch = String(templatePath || '').match(/_H(\d+)/i);
+    if (templateHolderMatch) {
+      holderNumbers.add(templateHolderMatch[1]);
+    }
+    // Ensure common holders exist so placeholders never stay undefined
+    ['1', '2', '3', '4'].forEach((n) => holderNumbers.add(n));
 
     // Add mappings for each holder (H1, H2, H3, H4, etc.)
     holderNumbers.forEach(num => {
@@ -1217,11 +1242,20 @@ const mapCompanyValuesToTemplate = async (companyId, templatePath) => {
         `Name as per DC ${hnSuffix}`
       );
       
-      // Claimant Relation H3
-      templateMappings[`Claimant Relation ${hnSuffix}`] = getValueOrPlaceholder(
-        valueMap[`Claimant Relation ${hnSuffix}`] || 
+      // Claimant Relation H3 — fall back to Deceased Relation C1 when holder relation is blank
+      let claimantRelationH =
+        valueMap[`Claimant Relation ${hnSuffix}`] ||
         valueMap[`claimant_relation_h${num}`] ||
-        valueMap[`relation_h${num}`],
+        valueMap[`relation_h${num}`];
+      if (!claimantRelationH || !String(claimantRelationH).trim()) {
+        claimantRelationH =
+          valueMap['Deceased Relation C1'] ||
+          valueMap['deceased_relation_c1'] ||
+          valueMap['Deceased Relation C2'] ||
+          '';
+      }
+      templateMappings[`Claimant Relation ${hnSuffix}`] = getValueOrPlaceholder(
+        claimantRelationH,
         `Claimant Relation ${hnSuffix}`
       );
       
@@ -1336,7 +1370,8 @@ const mapCompanyValuesToTemplate = async (companyId, templatePath) => {
 
     for (let num = 1; num <= 3; num++) {
       const cnSuffix = `C${num}`;
-      templateMappings[`Address Contact ${cnSuffix}`] = joinAddressContact(
+      const explicitAddressContact = templateMappings[`Address Contact ${cnSuffix}`] || valueMap[`Address Contact ${cnSuffix}`];
+      templateMappings[`Address Contact ${cnSuffix}`] = explicitAddressContact || joinAddressContact(
         templateMappings[`Address ${cnSuffix}`] || valueMap[`Address ${cnSuffix}`],
         templateMappings[`Mobile No ${cnSuffix}`] || valueMap[`Mobile No ${cnSuffix}`],
         templateMappings[`PIN ${cnSuffix}`] || valueMap[`PIN ${cnSuffix}`]
@@ -1800,13 +1835,16 @@ const mapCompanyValuesToTemplate = async (companyId, templatePath) => {
     // 4. Final validation - ensure data types match field types
     Object.entries(valueMap).forEach(([key, value]) => {
       if (value && typeof value === 'string') {
-        // PAN fields should be alphanumeric, 10+ chars, no spaces
-        if (key.includes('PAN') && (value.includes(' ') || value.length < 10)) {
+        // PAN *number* fields only (PAN C1) — NOT "Name as per PAN C1" (person's name on PAN card)
+        const isPanNumberField =
+          /^(PAN(\s*C\d+)?|pan_c\d+)$/i.test(String(key).trim()) &&
+          !/name\s+as\s+per\s+pan/i.test(key);
+        if (isPanNumberField && (value.includes(' ') || value.length < 10)) {
           console.log(`⚠️ Invalid PAN format for ${key}: ${value}`);
           valueMap[key] = '';
         }
-        // Name fields should have spaces (multiple words)
-        if (key.includes('Name') && !key.includes('PAN') && !value.includes(' ') && value.length > 5) {
+        // Name fields should have spaces (multiple words) — exclude PAN-number fields only
+        if (key.includes('Name') && !isPanNumberField && !value.includes(' ') && value.length > 5) {
           console.log(`⚠️ Suspicious name format for ${key}: ${value}`);
         }
       }
@@ -2016,6 +2054,8 @@ const downloadPopulatedTemplate = async (req, res) => {
     
     // Create a new zip file from the template
     const zip = new PizZip(templateBuffer);
+    // Fix VML artifacts like strokecolor="black [3040]" before [ ] tag parsing
+    sanitizeTemplateZip(zip);
     
     // Create docxtemplater instance with custom delimiters for square brackets
     const doc = new Docxtemplater(zip, {
