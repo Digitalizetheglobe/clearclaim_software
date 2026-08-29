@@ -66,22 +66,31 @@ const cleanFormattedListText = (text) => {
   // next token is structural legal text (not another name).
   // e.g. "Ramesh & Anuradha & Son / daughter..." → "Ramesh & Anuradha Son / daughter..."
   // e.g. "Father1 & Father2 & respectively" → "Father1 & Father2 respectively"
-  // e.g. "Name1 & Name2 & swear" → "Name1 & Name2 swear"
+  // e.g. "Name1 & Name2 & further swear" → "Name1 & Name2 further swear"
+  // e.g. "Name1 & Name2 & here by further" → "Name1 & Name2 here by further"
+  // e.g. "Name1 & Name2 & are making" → "Name1 & Name2 are making"
   const ampBeforeStructure =
-    /\s*&\s+(?=(?:Son|daughter|spouse|respectively|swear|further|do\b|residing|having|held|that\b|whose|who\b|are\b|is\b)\b)/gi;
+    /\s*&\s+(?=(?:Son|daughter|spouse|respectively|swear|further|hereby|here\s+by|do\b|residing|having|held|that\b|whose|who\b|are\b|is\b|making|apply|applying|confirm|declare|affirm|state|undertake|agree)\b)/gi;
   cleaned = cleaned.replace(ampBeforeStructure, ' ');
+
+  // Generic: orphan "&" before lowercase continuation (empty C3 left "Name & further/here…")
+  cleaned = cleaned.replace(/\s*&\s+(?=[a-z])/g, ' ');
 
   // Orphan "&" after commas / before sentence (empty first slot): "We, & Name2"
   cleaned = cleaned.replace(/,\s*&\s+/g, ', ');
   cleaned = cleaned.replace(/\(\s*&\s+/g, '(');
 
-  // Remove "Late ;", "Late ,", trailing "Late", orphaned "Late &"
-  cleaned = cleaned.replace(/\bLate\s*[,;]\s*/gi, '');
-  cleaned = cleaned.replace(/[,;]\s*\bLate\b/gi, '');
-  cleaned = cleaned.replace(/\bLate\s*&\s*/gi, '');
-  cleaned = cleaned.replace(/\s*&\s*\bLate\b/gi, '');
+  // Remove "Late ;" / "Late ," only when no shareholder name follows
+  // Keep "Late, Suresh Kumar" / "Late Suresh" (Form-B Point 1)
+  cleaned = cleaned.replace(/\bLate\s*[,;]\s*(?=(?:Late\b|[,;&]|\s*$))/gi, '');
+  cleaned = cleaned.replace(/[,;]\s*\bLate\b(?=\s*[,;&]|\s*$)/gi, '');
+  cleaned = cleaned.replace(/\bLate\s*&\s*(?=(?:Late\b|[,;&]|\s*$))/gi, '');
+  cleaned = cleaned.replace(/\s*&\s*\bLate\b(?=\s*[,;&]|\s*$)/gi, '');
   cleaned = cleaned.replace(/\bLate\s*$/gi, '');
-  cleaned = cleaned.replace(/^\s*\bLate\b\s*[,;&]?\s*/gi, '');
+  // Orphan "Late" at start of a fragment with only separators after
+  cleaned = cleaned.replace(/^\s*\bLate\b\s*[,;&]+\s*$/gi, '');
+  // Empty Late slots in lists: "Late, Late," or "Late ; Late"
+  cleaned = cleaned.replace(/(?:\bLate\s*[,;&]\s*){2,}/gi, '');
 
   // Remove repeated "or" with nothing between: "or or or", "or or ."
   cleaned = cleaned.replace(/(?:^|\s)(?:or\s*){2,}/gi, ' ');
@@ -96,13 +105,19 @@ const cleanFormattedListText = (text) => {
   cleaned = cleaned.replace(/\bdied intestate\s*,+/gi, 'died intestate ');
   cleaned = cleaned.replace(/\s+on\s+(?=without\b)/gi, ' ');
 
-  // Collapse / strip leftover semicolons from empty name slots: "; ;", ";;", "; are"
+  // Collapse / strip leftover semicolons from empty name/PAN slots: "; ;", ";;", "; are", "; do"
   do {
     prev = cleaned;
     cleaned = cleaned.replace(/;\s*;/g, ';');
   } while (cleaned !== prev);
   cleaned = cleaned.replace(/\s*;\s*(?=are\b)/gi, ' ');
+  cleaned = cleaned.replace(/\s*;\s*(?=do\b)/gi, ' ');
+  cleaned = cleaned.replace(/\s*;\s*(?=was\b)/gi, ' ');
+  cleaned = cleaned.replace(/\s*;\s*(?=were\b)/gi, ' ');
   cleaned = cleaned.replace(/\s*&\s*(?=are\b)/gi, ' ');
+  // "That Late, ; was" / "That Late,  was" when shareholder name missing
+  cleaned = cleaned.replace(/\bLate\s*,\s*(?=was\b)/gi, '');
+  cleaned = cleaned.replace(/\bLate\s*,\s*$/gi, '');
   cleaned = cleaned.replace(/\bLate\s*;+/gi, '');
   cleaned = cleaned.replace(/\bLate\s+(?=are\b)/gi, '');
   cleaned = cleaned.replace(/\s+&\s+Late\s*$/gi, '');
@@ -139,9 +154,23 @@ const cleanFormattedListText = (text) => {
   cleaned = cleaned.replace(/\s+&\s+(?=&)/g, ' ');
   cleaned = cleaned.replace(/\s+&\s*$/g, '');
   cleaned = cleaned.replace(/^\s*&\s+/g, '');
+  // Empty joint slots: "Name1 & &hereby" / "Name1 && Name2"
+  cleaned = cleaned.replace(/\s*&\s*(?=hereby\b)/gi, ' ');
+  cleaned = cleaned.replace(/\s*&\s*(?=declare\b)/gi, ' ');
+  cleaned = cleaned.replace(/\s*&\s*(?=confirm\b)/gi, ' ');
+  cleaned = cleaned.replace(/\s*&\s*(?=undertake\b)/gi, ' ');
+  cleaned = cleaned.replace(/\s*&\s*(?=have\b)/gi, ' ');
+  cleaned = cleaned.replace(/([A-Za-z])(?=(hereby|declare|confirm|undertake|have)\b)/g, '$1 ');
 
-  // Remove orphaned @ symbols
-  cleaned = cleaned.replace(/\s*@\s*/g, ' ');
+  // Normalize spaced emails FIRST so orphan-@ cleanup cannot destroy them
+  // e.g. "user @ gmail.com" / "user@ gmail.com" → "user@gmail.com"
+  cleaned = cleaned.replace(
+    /([A-Za-z0-9._%+-]+)\s*@\s*([A-Za-z0-9.-]+\.[A-Za-z]{2,})/g,
+    '$1@$2'
+  );
+
+  // Remove orphaned standalone "@" only — do NOT strip @ inside email addresses
+  cleaned = cleaned.replace(/(^|[\s,;])@(?=[\s,;]|$)/g, '$1');
 
   // Remove footnote "#" stuck to filled values (e.g. account "10378921868 #")
   cleaned = cleaned.replace(/(\d)\s+#(?=\s|$)/g, '$1');
@@ -192,6 +221,21 @@ const cleanFormattedListText = (text) => {
     cleaned = cleaned.replace(/\bI\/We\b/gi, pronoun);
   }
 
+  // Repair glued wording (IEPF indemnity + similar Word templates)
+  cleaned = cleaned.replace(/Rsand\b/gi, 'Rs and');
+  cleaned = cleaned.replace(/sharesbeing\b/gi, 'shares being');
+  cleaned = cleaned.replace(/amountand\b/gi, 'amount and');
+  cleaned = cleaned.replace(/\bIson\b/g, 'I son');
+  cleaned = cleaned.replace(/\)\s*out\b/g, ') out');
+  cleaned = cleaned.replace(/([A-Za-z0-9\)])from\(/gi, '$1 from (');
+  cleaned = cleaned.replace(/([A-Za-z0-9\)])from\b/gi, '$1 from');
+  cleaned = cleaned.replace(/\bfrom\(/gi, 'from (');
+  cleaned = cleaned.replace(/(LTD|LIMITED|BANK|PVT\.?|PRIVATE)\s*(from\b)/gi, '$1 $2');
+  cleaned = cleaned.replace(/\b(Rs)\s*(\d)/gi, '$1 $2');
+  cleaned = cleaned.replace(/\b(shares)\s*(\d)/gi, '$1 $2');
+  cleaned = cleaned.replace(/BCIN\)([A-Za-z])/gi, 'BCIN) $1');
+  cleaned = cleaned.replace(/CIN\/BCIN\)([A-Za-z])/gi, 'CIN/BCIN) $1');
+
   return cleaned;
 };
 
@@ -234,9 +278,21 @@ const isSignaturePlaceholderOnly = (text) => {
 const isBlankHeirCell = (text) =>
   isEmptyOrSeparatorOnly(text) || isSignaturePlaceholderOnly(text);
 
+/** Cells that shouldn't keep an otherwise-empty claimant/heir row visible */
+const isInsignificantHeirDetailCell = (text) => {
+  if (isBlankHeirCell(text)) return true;
+  const t = String(text || '').trim();
+  // Lone Indian PIN / mobile leftovers after empty name
+  if (/^\d{6}$/.test(t)) return true;
+  if (/^\d{10}$/.test(t)) return true;
+  if (/^(\d{6}|\d{10})(\s*,\s*(\d{6}|\d{10}))*$/.test(t)) return true;
+  return false;
+};
+
 /**
  * True when a table row only has list numbering (e.g. "4)") with no heir data.
  * Signature column may still contain a static "X" mark — treat that as empty.
+ * Also drop empty C3/LH slots that only have leftover PIN/mobile after the name is blank.
  */
 const isNumberedEmptyHeirRow = (rowContent) => {
   const cells = [...rowContent.matchAll(/(<w:tc(?:\s[^>]*)?>)([\s\S]*?)(<\/w:tc>)/g)];
@@ -248,19 +304,27 @@ const isNumberedEmptyHeirRow = (rowContent) => {
     .replace(/^\s*\(?\d{1,2}\)?\s*[).:-]?\s*/, '')
     .trim();
 
-  const otherCellsEmpty = cellTexts.slice(1).every((t) => isBlankHeirCell(t));
-  const firstEmpty =
+  const nameEmpty =
     isBlankHeirCell(firstWithoutNum) ||
     /^\(?\d{1,2}\)?\s*[).:-]?\s*$/.test(cellTexts[0]);
 
-  // Only treat as heir/signature list rows (2–4 cols), not securities headers
-  if (cells.length < 2 || cells.length > 4) return false;
+  const otherCellsInsignificant = cellTexts
+    .slice(1)
+    .every((t) => isInsignificantHeirDetailCell(t));
+
+  // Only treat as heir/signature list rows (2–5 cols), not securities headers
+  if (cells.length < 2 || cells.length > 5) return false;
   const joined = cellTexts.join(' ').toLowerCase();
   if (/company\s*name|folio|securities\s*held|certificate\s*no|distinctive/i.test(joined)) {
     return false;
   }
 
-  return firstEmpty && otherCellsEmpty;
+  const hasListNumber =
+    /^\s*\(?\d{1,2}\)?\s*[).:-]?/.test(cellTexts[0]) ||
+    /^\s*\d{1,2}\s*\)/.test(getRowText(rowContent));
+  if (!hasListNumber) return false;
+
+  return nameEmpty && otherCellsInsignificant;
 };
 
 /**
@@ -832,7 +896,7 @@ const fixIEPFIndemnityBondLayout = (xml) => {
   if (!/\[Financial Dividend Year\]/i.test(plain)) {
     const next = result.replace(
       /(Financial Year <\/w:t>)(<\/w:r>)/i,
-      '$1$2<w:r><w:t>[Financial Dividend Year]</w:t></w:r><w:r><w:t xml:space="preserve"> </w:t></w:r><w:r><w:t>[Company Name]</w:t></w:r>'
+      '$1$2<w:r><w:t>[Financial Dividend Year]</w:t></w:r><w:r><w:t xml:space="preserve"> </w:t></w:r><w:r><w:t>[Company Name]</w:t></w:r><w:r><w:t xml:space="preserve"> </w:t></w:r>'
     );
     if (next !== result) {
       result = next;
@@ -844,7 +908,7 @@ const fixIEPFIndemnityBondLayout = (xml) => {
   if (!/\[Company Name\]/i.test(plain)) {
     const next = result.replace(
       /(Financial Dividend Year\]<\/w:t>)(<\/w:r>)/i,
-      '$1$2<w:r><w:t xml:space="preserve"> </w:t></w:r><w:r><w:t>[Company Name]</w:t></w:r>'
+      '$1$2<w:r><w:t xml:space="preserve"> </w:t></w:r><w:r><w:t>[Company Name]</w:t></w:r><w:r><w:t xml:space="preserve"> </w:t></w:r>'
     );
     if (next !== result) {
       result = next;
@@ -889,11 +953,124 @@ const fixIEPFIndemnityBondLayout = (xml) => {
     return block;
   });
 
+  // Collapse duplicate adjacent placeholders (body + leftover float copies)
+  const dupTags = [
+    'Total Shares',
+    'Total Dividend Amount',
+    'Financial Dividend Year',
+    'Company Name',
+    'Name as per PAN C1',
+    'Name as per PAN C2',
+    'Name as per PAN C3',
+    'Father Name C1',
+    'Father Name C2',
+    'Father Name C3',
+  ];
+  dupTags.forEach((tag) => {
+    const esc = tag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const reSameNode = new RegExp(`(\\[${esc}\\])\\s*\\1`, 'gi');
+    result = result.replace(reSameNode, '$1');
+    const reAcrossRuns = new RegExp(
+      `(\\[${esc}\\])(<\\/w:t>[\\s\\S]{0,240}?<w:t[^>]*>)\\s*\\[${esc}\\]`,
+      'gi'
+    );
+    result = result.replace(reAcrossRuns, '$1$2');
+  });
+
+  // Ensure spaces around key placeholders before surrounding words
+  result = result.replace(/\[Company Name\]\s*from/gi, '[Company Name] from');
+  result = result.replace(/\[Financial Dividend Year\](?=\[)/gi, '[Financial Dividend Year] ');
+  result = result.replace(/\[Name as per PAN C1\]\s*out/gi, '[Name as per PAN C1] out');
+  result = result.replace(/\[Total Shares\]\s*being/gi, '[Total Shares] being');
+  result = result.replace(/\[Total Dividend Amount\]\s*and/gi, '[Total Dividend Amount] and');
+
   // Extreme negative character spacing collapses body text in browser preview
   result = result.replace(/<w:spacing\s+w:val="-\d+"\s*\/>/g, '');
 
   result = result.replace(/<w:drawing>\s*<\/w:drawing>/g, '');
   result = result.replace(/<w:r\b[^>]*>\s*<\/w:r>/g, '');
+
+  result = normalizeIEPFIndemnitySpacing(result);
+
+  return result;
+};
+
+/**
+ * When drawings/floats split words across adjacent <w:t> nodes (e.g. "amount"+"and"),
+ * insert a trailing space on the left node if mid-XML has no other visible text.
+ */
+const insertIEPFCrossRunSpace = (xml, leftExact, rightPrefix) => {
+  const esc = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const re = new RegExp(
+    `(<w:t([^>]*)>)(${esc(leftExact)})(</w:t>)([\\s\\S]{0,800}?)(<w:t([^>]*)>)(${esc(rightPrefix)})`,
+    'g'
+  );
+  return xml.replace(re, (full, open1, attrs1, left, close1, mid, open2, attrs2, right) => {
+    const midPlain = [...mid.matchAll(/<w:t[^>]*>([^<]*)<\/w:t>/g)]
+      .map((m) => m[1])
+      .join('');
+    if (midPlain.replace(/\s+/g, '').length > 0) return full;
+    if (/\s$/.test(left) || /^\s/.test(right)) return full;
+    const spaceAttr = /xml:space=/.test(attrs1 || '') ? '' : ' xml:space="preserve"';
+    return `<w:t${attrs1 || ''}${spaceAttr}>${left} </w:t>${mid}<w:t${attrs2 || ''}>${right}`;
+  });
+};
+
+/**
+ * Fix glued words / missing spaces typical of IEPF IndemnityBond templates
+ * (both placeholder stage and after population).
+ */
+const normalizeIEPFIndemnitySpacing = (xml) => {
+  if (!xml || !/Investor Education and Protection Fund Authority/i.test(xml)) return xml;
+
+  let result = xml.replace(/<w:t([^>]*)>([^<]*)<\/w:t>/g, (full, attrs, text) => {
+    let t = text;
+    // Common glued tokens in the official bond wording
+    t = t.replace(/Rsand\b/gi, 'Rs and');
+    t = t.replace(/sharesbeing\b/gi, 'shares being');
+    t = t.replace(/amountand\b/gi, 'amount and');
+    t = t.replace(/\bIson\b/g, 'I son');
+    t = t.replace(/\bI(?=son\b)/g, 'I ');
+    t = t.replace(/\)out\b/g, ') out');
+    t = t.replace(/\)from\b/gi, ') from');
+    t = t.replace(/([A-Za-z0-9\]\)])from\(/gi, '$1 from (');
+    t = t.replace(/([A-Za-z0-9\])])from\b/gi, '$1 from');
+    t = t.replace(/\bfrom\(/gi, 'from (');
+    t = t.replace(/Year\[/gi, 'Year [');
+    t = t.replace(/\]\[/g, '] [');
+    // Ensure space after filled company / year before "from"
+    t = t.replace(/(\d{4}\s*[-–]\s*\d{2,4})([A-Za-z])/g, '$1 $2');
+    t = t.replace(/(LTD|LIMITED|BANK|PVT\.?|PRIVATE)(from\b)/gi, '$1 $2');
+    // "No. of shares100" / "Rs12500"
+    t = t.replace(/\b(Rs)\s*(\d)/gi, '$1 $2');
+    t = t.replace(/\b(shares)\s*(\d)/gi, '$1 $2');
+    t = t.replace(/BCIN\)([A-Za-z])/gi, 'BCIN) $1');
+    t = t.replace(/\)([A-Z][a-z])/g, ') $1');
+    // Preserve intentional leading/trailing spaces
+    if (t === text) return full;
+    const spaceAttr =
+      (t.startsWith(' ') || t.endsWith(' ')) && !/xml:space=/.test(attrs || '')
+        ? ' xml:space="preserve"'
+        : '';
+    return `<w:t${attrs || ''}${spaceAttr}>${t}</w:t>`;
+  });
+
+  // Cross-run glue (float/drawing boundaries prevent paragraph merge cleanup)
+  result = insertIEPFCrossRunSpace(result, 'amount', 'and');
+  result = insertIEPFCrossRunSpace(result, 'I', 'son');
+  result = insertIEPFCrossRunSpace(result, 'from', '(Name');
+  // ")" then next run starting with a capital letter (claimant name after BCIN))
+  result = result.replace(
+    /(<w:t([^>]*)>)(\))(<\/w:t>)([\s\S]{0,800}?)(<w:t([^>]*)>)([A-Z][A-Za-z])/g,
+    (full, _open1, attrs1, left, _close1, mid, _open2, attrs2, right) => {
+      const midPlain = [...mid.matchAll(/<w:t[^>]*>([^<]*)<\/w:t>/g)]
+        .map((m) => m[1])
+        .join('');
+      if (midPlain.replace(/\s+/g, '').length > 0) return full;
+      const spaceAttr = /xml:space=/.test(attrs1 || '') ? '' : ' xml:space="preserve"';
+      return `<w:t${attrs1 || ''}${spaceAttr}>${left} </w:t>${mid}<w:t${attrs2 || ''}>${right}`;
+    }
+  );
 
   return result;
 };
@@ -1018,6 +1195,28 @@ const sanitizeTemplateZip = (zip) => {
 };
 
 /**
+ * After empty joint-name slots are cleared, declaration text can glue as
+ * "Kumarhereby" across adjacent w:t runs. Insert a leading space on the verb run.
+ */
+const fixGluedDeclarationVerbs = (xml) => {
+  if (!xml) return xml;
+  const verbs = 'hereby|declare|confirm|undertake|have|agree|affirm|state';
+  const re = new RegExp(
+    `(<w:t([^>]*)>)([^<]*[A-Za-z])(</w:t>)([\\s\\S]{0,4000}?)(<w:t([^>]*)>)((?:${verbs})\\b)`,
+    'gi'
+  );
+  return xml.replace(re, (full, _o1, a1, left, _c1, mid, _o2, a2, verb) => {
+    const midPlain = [...mid.matchAll(/<w:t[^>]*>([^<]*)<\/w:t>/g)]
+      .map((m) => m[1])
+      .join('');
+    if (midPlain.replace(/\s+/g, '').length > 0) return full;
+    if (/\s$/.test(left) || /^\s/.test(verb)) return full;
+    const spaceAttr = /xml:space=/.test(a2 || '') ? '' : ' xml:space="preserve"';
+    return `<w:t${a1 || ''}>${left}</w:t>${mid}<w:t${a2 || ''}${spaceAttr}> ${verb}`;
+  });
+};
+
+/**
  * Post-process document XML after docxtemplater render.
  */
 const postProcessDocumentXml = (xml) => {
@@ -1026,6 +1225,8 @@ const postProcessDocumentXml = (xml) => {
   result = result.replace(/undefined|null/gi, '');
   result = normalizeOversizedBodyFonts(result);
   result = cleanParagraphsInXml(result); // Re-enabled with segmented logic to preserve formatting
+  result = normalizeIEPFIndemnitySpacing(result);
+  result = fixGluedDeclarationVerbs(result);
   result = removeEmptyTableRows(result);
   result = renumberLegalHeirTableRows(result);
   result = removeTrailingEmptyTableColumns(result);

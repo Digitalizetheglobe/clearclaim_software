@@ -295,13 +295,30 @@ const mapCaseValuesToTemplate = async (caseId, templatePath) => {
           valueMap['Old Address C3'] = value;
         }
         
-        // Banking information mapping
-        if (key.includes('Bank Name C1')) {
-          valueMap['Bank Branch C1'] = value;
-          valueMap['Bank Address C1'] = value;
+        // Banking information mapping — do NOT overwrite distinct bank fields with each other
+        if (/^bank name c\d+$/i.test(key.trim())) {
+          const suffix = key.match(/c(\d+)$/i)[1];
+          if (!valueMap[`Bank Name C${suffix}`]) valueMap[`Bank Name C${suffix}`] = value;
         }
-        if (key.includes('Bank AC C1')) {
-          valueMap['Bank AC Type C1'] = value;
+        if (/^bank branch c\d+$/i.test(key.trim())) {
+          const suffix = key.match(/c(\d+)$/i)[1];
+          if (!valueMap[`Bank Branch C${suffix}`]) valueMap[`Bank Branch C${suffix}`] = value;
+        }
+        if (/^bank address c\d+$/i.test(key.trim()) || /^postal address c\d+$/i.test(key.trim())) {
+          const suffix = key.match(/c(\d+)$/i)[1];
+          if (!valueMap[`Bank Address C${suffix}`]) valueMap[`Bank Address C${suffix}`] = value;
+        }
+        if (
+          (/^bank ac c\d+$/i.test(key.trim()) ||
+            /^bank account( number| no)? c\d+$/i.test(key.trim())) &&
+          !key.includes('type')
+        ) {
+          const suffix = key.match(/c(\d+)$/i)[1];
+          if (!valueMap[`Bank AC C${suffix}`]) valueMap[`Bank AC C${suffix}`] = value;
+        }
+        if (/^bank ac type c\d+$/i.test(key.trim()) || /^bank account type c\d+$/i.test(key.trim())) {
+          const suffix = key.match(/c(\d+)$/i)[1];
+          if (!valueMap[`Bank AC Type C${suffix}`]) valueMap[`Bank AC Type C${suffix}`] = value;
         }
         
         // Company and shares mapping

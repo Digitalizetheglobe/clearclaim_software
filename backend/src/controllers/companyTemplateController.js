@@ -149,6 +149,18 @@ const getValueOrPlaceholder = (value, fieldName) => {
   
   // Clean the value of any undefined text
   let cleanedValue = value.toString().replace(/undefined|UNDEFINED|null|NULL/gi, '').trim();
+
+  // Emails: only normalize spaced @ — never run list/ampersand cleanup that can drop "@"
+  if (fieldName && /email/i.test(fieldName)) {
+    cleanedValue = cleanedValue.replace(
+      /([A-Za-z0-9._%+-]+)\s*@\s*([A-Za-z0-9.-]+\.[A-Za-z]{2,})/g,
+      '$1@$2'
+    );
+    cleanedValue = cleanedValue.replace(/\s*@\s*/g, '@');
+    cleanedValue = cleanedValue.trim();
+    if (!cleanedValue) return getPlaceholderText(fieldName);
+    return cleanedValue;
+  }
   
   // Remove trailing commas, "&", dots, etc. from all values
   cleanedValue = cleanedValue.replace(/[,.\s]*&[\s,]*$/g, ''); // Remove trailing "&" with any surrounding commas/spaces
@@ -592,11 +604,12 @@ const mapCompanyValuesToTemplate = async (companyId, templatePath) => {
         }
         
         // Handle H fields (H1, H2, H3, H4) for deceased/holder names
-        // Name as per Certificate H3
+        // Name as per Certificate H3 (also short "Name as per Cert H3")
         if ((key.includes('name as per cert') || key.includes('name as per certificate')) && key.match(/h\d+$/i)) {
           const suffix = key.match(/h(\d+)$/i)[1];
           const fieldKey = `Name as per Certificate H${suffix}`;
           if (!valueMap[fieldKey]) valueMap[fieldKey] = cv.field_value;
+          if (!valueMap[`Name as per Cert H${suffix}`]) valueMap[`Name as per Cert H${suffix}`] = cv.field_value;
           if (!valueMap[`name_cert_h${suffix}`]) valueMap[`name_cert_h${suffix}`] = cv.field_value;
           console.log(`✅ Mapped Name as per Certificate H${suffix} from key "${cv.caseField.field_key}": ${cv.field_value}`);
         }
@@ -662,16 +675,57 @@ const mapCompanyValuesToTemplate = async (companyId, templatePath) => {
           if (!valueMap[fieldKey]) valueMap[fieldKey] = cv.field_value;
           if (!valueMap[`address_c${suffix}`]) valueMap[`address_c${suffix}`] = cv.field_value;
           console.log(`✅ Mapped claimant address for ${fieldKey}: ${cv.field_value}`);
-        } else if (key.includes('address c') && key.match(/c\d+$/) && (key.includes('bank') || key.includes('Bank'))) {
-          console.log(`⚠️ Skipping bank address mapping for Address: ${cv.field_value}`);
+        }
+
+        // Bank Address C1/C2/C3 (must not be skipped — ISR-2 uses these placeholders)
+        if (
+          (key.includes('bank address') || key.includes('bank_address') || key.includes('postal address')) &&
+          key.match(/c\s*\d+$/i)
+        ) {
+          const suffix = key.match(/c\s*(\d+)$/i)[1];
+          const fieldKey = `Bank Address C${suffix}`;
+          if (!valueMap[fieldKey]) valueMap[fieldKey] = cv.field_value;
+          if (!valueMap[`bank_address_c${suffix}`]) valueMap[`bank_address_c${suffix}`] = cv.field_value;
+          console.log(`✅ Mapped bank address for ${fieldKey}: ${cv.field_value}`);
+        }
+
+        // Bank account number — "Bank AC C1", "Bank Account C1", "Bank Account Number C1"
+        if (
+          (key.match(/bank\s*ac\s*c\d+$/i) ||
+            key.match(/bank\s*account(\s*number)?\s*c\d+$/i) ||
+            key.match(/bank_ac_c\d+$/i) ||
+            key.match(/bank_account(_number)?_c\d+$/i)) &&
+          !key.includes('type') &&
+          !key.includes('open')
+        ) {
+          const suffix = key.match(/c\s*(\d+)$/i)[1];
+          const fieldKey = `Bank AC C${suffix}`;
+          if (!valueMap[fieldKey]) valueMap[fieldKey] = cv.field_value;
+          if (!valueMap[`bank_ac_c${suffix}`]) valueMap[`bank_ac_c${suffix}`] = cv.field_value;
+          if (!valueMap[`bank_account_c${suffix}`]) valueMap[`bank_account_c${suffix}`] = cv.field_value;
+          console.log(`✅ Mapped bank account for ${fieldKey}: ${cv.field_value}`);
         }
         
-        // Handle PAN fields dynamically
-        if (key.includes('pan c') && key.match(/c\d+$/)) {
-          const suffix = key.match(/c(\d+)$/)[1];
+        // Handle PAN *number* fields only — NEVER "Name as per PAN C1" (that is a person's name)
+        if (
+          (/^pan\s*c\d+$/i.test(key.trim()) || /^pan_c\d+$/i.test(key.trim())) &&
+          !/name\s*as\s*per\s*pan/i.test(key) &&
+          !/name\s*as\s*per\s*pan/i.test(label)
+        ) {
+          const suffix = key.match(/c\s*(\d+)$/i)[1];
           const fieldKey = `PAN C${suffix}`;
-          if (!valueMap[fieldKey]) valueMap[fieldKey] = cv.field_value;
-          if (!valueMap[`pan_c${suffix}`]) valueMap[`pan_c${suffix}`] = cv.field_value;
+          const looksLikePan = (v) =>
+            /^[A-Z]{5}[0-9]{4}[A-Z]$/i.test(String(v || '').trim());
+          const incoming = String(cv.field_value || '').trim();
+          const existing = valueMap[fieldKey];
+          // Only store real PAN numbers in PAN C* (never names)
+          if (looksLikePan(incoming)) {
+            valueMap[fieldKey] = incoming.toUpperCase();
+            valueMap[`pan_c${suffix}`] = incoming.toUpperCase();
+            console.log(`✅ Mapped PAN number for ${fieldKey}: ${incoming}`);
+          } else if (!existing) {
+            console.log(`⚠️ Skipping non-PAN value for ${fieldKey}: "${incoming}"`);
+          }
         }
         
         // Handle age fields dynamically
@@ -704,6 +758,22 @@ const mapCompanyValuesToTemplate = async (companyId, templatePath) => {
           const fieldKey = `Email ID C${suffix}`;
           if (!valueMap[fieldKey]) valueMap[fieldKey] = cv.field_value;
           if (!valueMap[`email_c${suffix}`]) valueMap[`email_c${suffix}`] = cv.field_value;
+        }
+
+        // City / State (ISR-5 uses bare [City]/[State]; values live as City C1 / State C1)
+        if (/^city\s*c\d+$/i.test(key.trim()) || /^city_c\d+$/i.test(key.trim())) {
+          const suffix = key.match(/c\s*(\d+)/i)[1];
+          const fieldKey = `City C${suffix}`;
+          if (!valueMap[fieldKey]) valueMap[fieldKey] = cv.field_value;
+          if (!valueMap[`city_c${suffix}`]) valueMap[`city_c${suffix}`] = cv.field_value;
+          if (suffix === '1' && !valueMap['City']) valueMap['City'] = cv.field_value;
+        }
+        if (/^state\s*c\d+$/i.test(key.trim()) || /^state_c\d+$/i.test(key.trim())) {
+          const suffix = key.match(/c\s*(\d+)/i)[1];
+          const fieldKey = `State C${suffix}`;
+          if (!valueMap[fieldKey]) valueMap[fieldKey] = cv.field_value;
+          if (!valueMap[`state_c${suffix}`]) valueMap[`state_c${suffix}`] = cv.field_value;
+          if (suffix === '1' && !valueMap['State']) valueMap['State'] = cv.field_value;
         }
         
         // Handle account opening date fields dynamically
@@ -758,9 +828,13 @@ const mapCompanyValuesToTemplate = async (companyId, templatePath) => {
           if (!valueMap['Folio No']) valueMap['Folio No'] = cv.field_value;
           if (!valueMap['folio_no']) valueMap['folio_no'] = cv.field_value;
         }
-        if (key === 'total shares') {
+        if (key === 'total shares' || key === 'total_shares') {
           if (!valueMap['Total Shares']) valueMap['Total Shares'] = cv.field_value;
           if (!valueMap['total_shares']) valueMap['total_shares'] = cv.field_value;
+        }
+        if (key === 'face value' || key === 'face_value' || key === 'fv') {
+          if (!valueMap['Face Value']) valueMap['Face Value'] = cv.field_value;
+          if (!valueMap['face_value']) valueMap['face_value'] = cv.field_value;
         }
         if (key === 'rta name') {
           if (!valueMap['RTA Name']) valueMap['RTA Name'] = cv.field_value;
@@ -824,6 +898,14 @@ const mapCompanyValuesToTemplate = async (companyId, templatePath) => {
       'Company Name': getValueOrPlaceholder(valueMap['company_name'] || valueMap['Company Name'], 'Company Name'),
       'Folio No': getValueOrPlaceholder(valueMap['folio_no'] || valueMap['Folio No'], 'Folio No'),
       'Total Shares': getValueOrPlaceholder(valueMap['total_shares'] || valueMap['Total Shares'], 'Total Shares'),
+      'Face Value': getValueOrPlaceholder(
+        valueMap['face_value'] ||
+          valueMap['Face Value'] ||
+          valueMap['Face value'] ||
+          valueMap['FV'] ||
+          valueMap['fv'],
+        'Face Value'
+      ),
       // Date of Issue should ONLY come from database, not current date
       'Date of Issue': getValueOrPlaceholder(valueMap['date_of_issue'] || valueMap['Date of Issue'], 'Date of Issue'),
       'Current Date': formatDate(new Date()),
@@ -834,7 +916,16 @@ const mapCompanyValuesToTemplate = async (companyId, templatePath) => {
       'IEPF Dividends Details': getValueOrPlaceholder(valueMap['iepf_dividends_details'] || valueMap['IEPF Dividends Details'], 'IEPF Dividends Details'),
       'Company Address': getValueOrPlaceholder(valueMap['company_address'] || valueMap['Company Address'], 'Company Address'),
       'Occupation C1': getValueOrPlaceholder(valueMap['occupation_c1'] || valueMap['Occupation C1'], 'Occupation C1'),
-      'PIN Code': getValueOrPlaceholder(valueMap['pin_c1'] || valueMap['PIN C1'] || valueMap['PIN Code'], 'PIN Code'),
+      'PIN Code': getValueOrPlaceholder(valueMap['pin_c1'] || valueMap['PIN C1'] || valueMap['PIN Code'] || valueMap['PIN'], 'PIN Code'),
+      // ISR-5 uses bare [City] / [State] placeholders (values usually City C1 / State C1)
+      'City': getValueOrPlaceholder(
+        valueMap['City'] || valueMap['City C1'] || valueMap['city_c1'] || valueMap['city'],
+        'City'
+      ),
+      'State': getValueOrPlaceholder(
+        valueMap['State'] || valueMap['State C1'] || valueMap['state_c1'] || valueMap['state'],
+        'State'
+      ),
     };
 
     // Dynamically add mappings for all joint holders (C1, C2, C3, C4, C5, etc.)
@@ -993,16 +1084,46 @@ const mapCompanyValuesToTemplate = async (companyId, templatePath) => {
         valueMap[`Name as per Cert ${cnSuffix}`], 
         `Name as per Cert ${cnSuffix}`
       );
+      const looksLikePanNumber = (v) => {
+        const s = String(v || '').trim().toUpperCase();
+        return /^[A-Z]{5}[0-9]{4}[A-Z]$/.test(s);
+      };
+      let panNumberValue =
+        valueMap[`pan_c${num}`] ||
+        valueMap[`PAN ${cnSuffix}`] ||
+        valueMap[`PAN_C${num}`] ||
+        valueMap[`pan number c${num}`] ||
+        valueMap[`PAN Number ${cnSuffix}`];
+      // If polluted with a name (from older buggy mapping), recover real PAN from valueMap/company values
+      if (panNumberValue && !looksLikePanNumber(panNumberValue)) {
+        const recovered =
+          Object.entries(valueMap).find(([k, v]) =>
+            /^(pan\s*c\d+|pan_c\d+)$/i.test(String(k).trim()) &&
+            String(k).toLowerCase().includes(`c${num}`) &&
+            !/name/.test(k) &&
+            looksLikePanNumber(v)
+          )?.[1] ||
+          null;
+        panNumberValue = recovered || '';
+      }
       templateMappings[`PAN ${cnSuffix}`] = getValueOrPlaceholder(
-        valueMap[`pan_c${num}`] || valueMap[`PAN ${cnSuffix}`], 
+        panNumberValue,
         `PAN ${cnSuffix}`
       );
+      // Keep valueMap in sync so ISR-5 [PAN C1] always resolves to the number
+      if (looksLikePanNumber(templateMappings[`PAN ${cnSuffix}`])) {
+        valueMap[`PAN ${cnSuffix}`] = templateMappings[`PAN ${cnSuffix}`];
+        valueMap[`pan_c${num}`] = templateMappings[`PAN ${cnSuffix}`];
+      }
       templateMappings[`Mobile No ${cnSuffix}`] = getValueOrPlaceholder(
         valueMap[`mobile_c${num}`] || valueMap[`Mobile No ${cnSuffix}`], 
         `Mobile No ${cnSuffix}`
       );
       templateMappings[`Email ID ${cnSuffix}`] = getValueOrPlaceholder(
-        valueMap[`email_c${num}`] || valueMap[`Email ID ${cnSuffix}`], 
+        valueMap[`email_c${num}`] ||
+          valueMap[`Email ID ${cnSuffix}`] ||
+          valueMap[`email_id_c${num}`] ||
+          (num === '1' ? (valueMap['Email ID'] || valueMap['email'] || valueMap['email_id']) : null),
         `Email ID ${cnSuffix}`
       );
       templateMappings[`DOB ${cnSuffix}`] = getValueOrPlaceholder(
@@ -1058,8 +1179,10 @@ const mapCompanyValuesToTemplate = async (companyId, templatePath) => {
       // First, try to find the correct claimant PIN
       const claimantPin = valueMap[`pin_c${num}`] || 
                          valueMap[`PIN ${cnSuffix}`] ||
+                         valueMap[`PIN Code ${cnSuffix}`] ||
                          valueMap[`claimant_pin_c${num}`] ||
-                         valueMap[`residential_pin_c${num}`];
+                         valueMap[`residential_pin_c${num}`] ||
+                         (num === '1' ? (valueMap['PIN Code'] || valueMap['PIN'] || valueMap['pin_code']) : null);
       
       // Ensure we're not using bank PIN for claimant PIN field
       const bankPin = valueMap[`Bank PIN ${cnSuffix}`] || 
@@ -1077,7 +1200,16 @@ const mapCompanyValuesToTemplate = async (companyId, templatePath) => {
       
       // CRITICAL: For PIN fields, only use the exact value for this C number
       // Don't allow fallback to other C numbers (e.g., don't use PIN C1 for PIN C2 or PIN C3)
-      // If finalPin is empty or doesn't exist, return empty string (not placeholder)
+      // If finalPin is empty, try to extract 6-digit PIN from address (common in ISR-5)
+      if (!finalPin || finalPin.trim() === '' || finalPin === 'undefined' || finalPin === 'null') {
+        const addrForPin = String(finalAddress || templateMappings[`Address ${cnSuffix}`] || '').trim();
+        const pinFromAddress = addrForPin.match(/(?:PIN\s*(?:code)?\s*[:-]?\s*|,\s*|-\s*)(\d{6})\b/i) ||
+          addrForPin.match(/\b(\d{6})\b/);
+        if (pinFromAddress) {
+          finalPin = pinFromAddress[1];
+          console.log(`✅ Extracted PIN ${cnSuffix} from address: ${finalPin}`);
+        }
+      }
       if (!finalPin || finalPin.trim() === '' || finalPin === 'undefined' || finalPin === 'null') {
         templateMappings[`PIN ${cnSuffix}`] = ''; // Empty string, not placeholder
         console.log(`⚠️ PIN ${cnSuffix} is empty - using empty string (not falling back to other C numbers)`);
@@ -1088,10 +1220,17 @@ const mapCompanyValuesToTemplate = async (companyId, templatePath) => {
         );
       }
       // Combined address + PIN for templates that need both in one field
-      const addressParts = [templateMappings[`Address ${cnSuffix}`], templateMappings[`PIN ${cnSuffix}`]]
-        .filter((v) => v && v.trim() !== '');
-      if (addressParts.length > 0) {
-        const combinedAddress = addressParts.join(', ');
+      const addrOnly = (templateMappings[`Address ${cnSuffix}`] || '').toString().trim();
+      const pinOnly = (templateMappings[`PIN ${cnSuffix}`] || '').toString().trim();
+      let combinedAddress = addrOnly;
+      if (pinOnly) {
+        const pinEsc = pinOnly.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const addrHasPin = addrOnly && new RegExp(`(^|[\\s,;])${pinEsc}([\\s,;]|$)`).test(addrOnly);
+        if (!addrHasPin) {
+          combinedAddress = [addrOnly, pinOnly].filter(Boolean).join(', ');
+        }
+      }
+      if (combinedAddress) {
         templateMappings[`Address with PIN ${cnSuffix}`] = combinedAddress;
         valueMap[`Address with PIN ${cnSuffix}`] = combinedAddress;
       }
@@ -1100,33 +1239,58 @@ const mapCompanyValuesToTemplate = async (companyId, templatePath) => {
         `Old Address ${cnSuffix}`
       );
 
-      // Banking Information
+      // Banking Information — rich aliases so ISR-2 Bank AC / Bank Address always resolve
       templateMappings[`Bank AC Type ${cnSuffix}`] = getValueOrPlaceholder(
-        valueMap[`Bank AC Type ${cnSuffix}`], 
+        valueMap[`Bank AC Type ${cnSuffix}`] ||
+          valueMap[`bank_ac_type_c${num}`] ||
+          valueMap[`Bank Account Type ${cnSuffix}`],
         `Bank AC Type ${cnSuffix}`
       );
       templateMappings[`Bank Name ${cnSuffix}`] = getValueOrPlaceholder(
-        valueMap[`Bank Name ${cnSuffix}`], 
+        valueMap[`Bank Name ${cnSuffix}`] || valueMap[`bank_name_c${num}`],
         `Bank Name ${cnSuffix}`
       );
+      const bankAccountNumber =
+        valueMap[`Bank AC ${cnSuffix}`] ||
+        valueMap[`bank_ac_c${num}`] ||
+        valueMap[`bank_account_c${num}`] ||
+        valueMap[`bank_account_number_c${num}`] ||
+        valueMap[`Bank Account ${cnSuffix}`] ||
+        valueMap[`Bank Account Number ${cnSuffix}`] ||
+        valueMap[`Bank Account No ${cnSuffix}`] ||
+        valueMap[`Account Number ${cnSuffix}`] ||
+        valueMap[`Account No ${cnSuffix}`];
       templateMappings[`Bank AC ${cnSuffix}`] = getValueOrPlaceholder(
-        valueMap[`Bank AC ${cnSuffix}`], 
+        bankAccountNumber,
         `Bank AC ${cnSuffix}`
       );
+      // Aliases used by some templates / Excel headers
+      templateMappings[`Bank Account ${cnSuffix}`] = templateMappings[`Bank AC ${cnSuffix}`];
+      templateMappings[`Bank Account Number ${cnSuffix}`] = templateMappings[`Bank AC ${cnSuffix}`];
+      templateMappings[`Bank Account No ${cnSuffix}`] = templateMappings[`Bank AC ${cnSuffix}`];
+
       templateMappings[`Bank Branch ${cnSuffix}`] = getValueOrPlaceholder(
-        valueMap[`Bank Branch ${cnSuffix}`], 
+        valueMap[`Bank Branch ${cnSuffix}`] || valueMap[`bank_branch_c${num}`],
         `Bank Branch ${cnSuffix}`
       );
       templateMappings[`IFSC ${cnSuffix}`] = getValueOrPlaceholder(
-        valueMap[`IFSC ${cnSuffix}`], 
+        valueMap[`IFSC ${cnSuffix}`] || valueMap[`ifsc_c${num}`],
         `IFSC ${cnSuffix}`
       );
+      const bankAddressValue =
+        valueMap[`Bank Address ${cnSuffix}`] ||
+        valueMap[`bank_address_c${num}`] ||
+        valueMap[`Postal Address ${cnSuffix}`] ||
+        valueMap[`postal_address_c${num}`] ||
+        valueMap[`Bank Postal Address ${cnSuffix}`];
       templateMappings[`Bank Address ${cnSuffix}`] = getValueOrPlaceholder(
-        valueMap[`Bank Address ${cnSuffix}`], 
+        bankAddressValue,
         `Bank Address ${cnSuffix}`
       );
+      templateMappings[`Postal Address ${cnSuffix}`] = templateMappings[`Bank Address ${cnSuffix}`];
+
       templateMappings[`MICR ${cnSuffix}`] = getValueOrPlaceholder(
-        valueMap[`MICR ${cnSuffix}`], 
+        valueMap[`MICR ${cnSuffix}`] || valueMap[`micr_c${num}`],
         `MICR ${cnSuffix}`
       );
       // For A/C Open Date, provide a fallback if no data exists
@@ -1153,6 +1317,64 @@ const mapCompanyValuesToTemplate = async (companyId, templatePath) => {
         `DEMAT AC ${cnSuffix}`
       );
     });
+
+    // ISR-5: refresh bare [City]/[State]/[PIN C1] after C1 mappings (and address PIN extract)
+    {
+      const cityC1 =
+        templateMappings['City'] ||
+        valueMap['City'] ||
+        valueMap['City C1'] ||
+        valueMap['city_c1'] ||
+        templateMappings['City C1'];
+      const stateC1 =
+        templateMappings['State'] ||
+        valueMap['State'] ||
+        valueMap['State C1'] ||
+        valueMap['state_c1'] ||
+        templateMappings['State C1'];
+      let pinC1 = templateMappings['PIN C1'] || valueMap['PIN C1'] || valueMap['pin_c1'] || '';
+      const addrC1 = String(templateMappings['Address C1'] || valueMap['Address C1'] || '').trim();
+
+      if (!pinC1 || !String(pinC1).trim()) {
+        const pinMatch =
+          addrC1.match(/(?:PIN\s*(?:code)?\s*[:-]?\s*|,\s*|-\s*)(\d{6})\b/i) ||
+          addrC1.match(/\b(\d{6})\b/);
+        if (pinMatch) pinC1 = pinMatch[1];
+      }
+
+      // Infer City/State from "…, City, State PIN 411001" style addresses when blank
+      let inferredCity = cityC1;
+      let inferredState = stateC1;
+      if ((!inferredCity || !inferredState) && addrC1) {
+        const parts = addrC1
+          .replace(/\bPIN\s*(?:code)?\s*[:-]?\s*\d{6}\b/gi, '')
+          .replace(/\b\d{6}\b/g, '')
+          .split(',')
+          .map((p) => p.trim())
+          .filter(Boolean);
+        if (parts.length >= 2) {
+          if (!inferredState) inferredState = parts[parts.length - 1];
+          if (!inferredCity) inferredCity = parts[parts.length - 2];
+        }
+      }
+
+      templateMappings['City'] = getValueOrPlaceholder(inferredCity, 'City');
+      templateMappings['State'] = getValueOrPlaceholder(inferredState, 'State');
+      if (pinC1 && String(pinC1).trim()) {
+        templateMappings['PIN C1'] = getValueOrPlaceholder(pinC1, 'PIN C1');
+        templateMappings['PIN Code'] = templateMappings['PIN C1'];
+        valueMap['PIN C1'] = templateMappings['PIN C1'];
+        valueMap['pin_c1'] = templateMappings['PIN C1'];
+      }
+      if (templateMappings['City']) {
+        valueMap['City'] = templateMappings['City'];
+        valueMap['City C1'] = templateMappings['City'];
+      }
+      if (templateMappings['State']) {
+        valueMap['State'] = templateMappings['State'];
+        valueMap['State C1'] = templateMappings['State'];
+      }
+    }
 
     // Dynamically add mappings for H fields (H1, H2, H3, H4) - deceased/holder names
     // Find all unique H numbers from the valueMap and allHFields
@@ -1241,6 +1463,21 @@ const mapCompanyValuesToTemplate = async (companyId, templatePath) => {
         dcName,
         `Name as per DC ${hnSuffix}`
       );
+
+      // Cross-fill Certificate ↔ DC so Annexure-E deceased holder lists include H3
+      // when only one of the two name fields was entered.
+      if ((!certName || !String(certName).trim()) && dcName && String(dcName).trim()) {
+        templateMappings[`Name as per Certificate ${hnSuffix}`] = getValueOrPlaceholder(
+          dcName,
+          `Name as per Certificate ${hnSuffix}`
+        );
+      }
+      if ((!dcName || !String(dcName).trim()) && certName && String(certName).trim()) {
+        templateMappings[`Name as per DC ${hnSuffix}`] = getValueOrPlaceholder(
+          certName,
+          `Name as per DC ${hnSuffix}`
+        );
+      }
       
       // Claimant Relation H3 — fall back to Deceased Relation C1 when holder relation is blank
       let claimantRelationH =
@@ -1291,27 +1528,39 @@ const mapCompanyValuesToTemplate = async (companyId, templatePath) => {
       );
     });
 
+    const isUsableMappedValue = (val) => {
+      if (val === undefined || val === null) return false;
+      const s = String(val).trim();
+      if (!s || s.startsWith('[')) return false;
+      if (/^(undefined|null)$/i.test(s)) return false;
+      if (/^_+$/.test(s) || s === '_________________') return false;
+      return true;
+    };
+
+    const resolveDeceasedHolderName = (h) => {
+      const candidates = [
+        templateMappings[`Name as per Certificate H${h}`],
+        valueMap[`Name as per Certificate H${h}`],
+        valueMap[`Name as per Cert H${h}`],
+        valueMap[`name_cert_h${h}`],
+        valueMap[`name as per certificate h${h}`],
+        valueMap[`name as per cert h${h}`],
+        templateMappings[`Name as per DC H${h}`],
+        valueMap[`Name as per DC H${h}`],
+        valueMap[`name_dc_h${h}`],
+        valueMap[`name as per dc h${h}`]
+      ];
+      for (const c of candidates) {
+        if (isUsableMappedValue(c)) return String(c).trim();
+      }
+      return '';
+    };
+
     // Combined deceased holder name(s) for Annexure-D — avoids ", , ," when H1–H4 are empty
     const deceasedDcNames = [];
     for (let h = 1; h <= 4; h++) {
-      const dcVal =
-        templateMappings[`Name as per DC H${h}`] ||
-        valueMap[`Name as per DC H${h}`] ||
-        valueMap[`name_dc_h${h}`];
-      if (dcVal && String(dcVal).trim()) {
-        deceasedDcNames.push(String(dcVal).trim());
-      }
-    }
-    if (deceasedDcNames.length === 0) {
-      for (let h = 1; h <= 4; h++) {
-        const certVal =
-          templateMappings[`Name as per Certificate H${h}`] ||
-          valueMap[`Name as per Certificate H${h}`] ||
-          valueMap[`name_cert_h${h}`];
-        if (certVal && String(certVal).trim()) {
-          deceasedDcNames.push(String(certVal).trim());
-        }
-      }
+      const name = resolveDeceasedHolderName(h);
+      if (name) deceasedDcNames.push(name);
     }
     const deceasedNamesJoined = cleanCommaSeparatedList(deceasedDcNames.join(', '));
     templateMappings['Deceased Names DC'] = deceasedNamesJoined;
@@ -1322,14 +1571,20 @@ const mapCompanyValuesToTemplate = async (companyId, templatePath) => {
       : '';
     templateMappings['Deceased Name Late'] = templateMappings['Deceased Names Late'];
 
+    // Write resolved shareholder names back onto Certificate H placeholders (Form-B Point 1)
+    for (let h = 1; h <= 4; h++) {
+      const name = resolveDeceasedHolderName(h);
+      if (name) {
+        templateMappings[`Name as per Certificate H${h}`] = name;
+        templateMappings[`Name as per Cert H${h}`] = name;
+        valueMap[`Name as per Certificate H${h}`] = name;
+      }
+    }
+
     // Combined "Name on Date" clause for Annexure-E — avoids "on , on on , on"
     const deceasedDeathParts = [];
     for (let h = 1; h <= 4; h++) {
-      const rawName =
-        templateMappings[`Name as per DC H${h}`] ||
-        valueMap[`Name as per DC H${h}`] ||
-        valueMap[`name_dc_h${h}`] ||
-        '';
+      const name = resolveDeceasedHolderName(h);
       const rawDod =
         templateMappings[`DOD H${h}`] ||
         valueMap[`DOD H${h}`] ||
@@ -1337,41 +1592,71 @@ const mapCompanyValuesToTemplate = async (companyId, templatePath) => {
         valueMap[`Date of demise** H${h}`] ||
         valueMap[`Date of demise H${h}`] ||
         '';
-      const name = String(rawName).trim();
       const dod = String(rawDod).trim();
-      const nameOk = name && !name.startsWith('[') && name.toLowerCase() !== 'undefined';
-      const dodOk = dod && !dod.startsWith('[') && dod.toLowerCase() !== 'undefined';
-      if (nameOk && dodOk) deceasedDeathParts.push(`${name} on ${dod}`);
-      else if (nameOk) deceasedDeathParts.push(name);
+      const dodOk = isUsableMappedValue(dod);
+      if (name && dodOk) deceasedDeathParts.push(`${name} on ${dod}`);
+      else if (name) deceasedDeathParts.push(name);
       else if (dodOk) deceasedDeathParts.push(dod);
     }
     templateMappings['Deceased Death Details'] = cleanCommaSeparatedList(deceasedDeathParts.join(', '));
 
     const certificateHolderNames = [];
     for (let h = 1; h <= 4; h++) {
-      const certVal =
-        templateMappings[`Name as per Certificate H${h}`] ||
-        valueMap[`Name as per Certificate H${h}`] ||
-        valueMap[`name_cert_h${h}`];
-      if (certVal && String(certVal).trim() && !String(certVal).trim().startsWith('[')) {
-        certificateHolderNames.push(String(certVal).trim());
-      }
+      const name = resolveDeceasedHolderName(h);
+      if (name) certificateHolderNames.push(name);
     }
     const deceasedCertificateNamesJoined = cleanCommaSeparatedList(certificateHolderNames.join(', '));
     templateMappings['Deceased Names Certificate'] = deceasedCertificateNamesJoined;
     templateMappings['Deceased Name Certificate'] = deceasedCertificateNamesJoined;
 
     const joinAddressContact = (address, mobile, pin) => {
-      const parts = [address, mobile, pin]
-        .map((p) => (p || '').toString().trim())
-        .filter((p) => p && !p.match(/^[,.\s&]+$/));
-      return cleanCommaSeparatedList(parts.join(', '));
+      let addr = (address || '').toString().trim();
+      let mob = (mobile || '').toString().trim();
+      let pinVal = (pin || '').toString().trim();
+
+      const isBadPart = (v) =>
+        !v ||
+        v.startsWith('[') ||
+        /^(undefined|null)$/i.test(v) ||
+        /^[,.\s&]+$/.test(v) ||
+        /^_+$/.test(v);
+
+      if (isBadPart(addr)) addr = '';
+      if (isBadPart(mob)) mob = '';
+      if (isBadPart(pinVal)) pinVal = '';
+
+      // Address often already ends with PIN — don't repeat after mobile/contact
+      if (pinVal && addr) {
+        const pinEsc = pinVal.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        if (new RegExp(`(^|[\\s,;])${pinEsc}([\\s,;]|$)`).test(addr)) {
+          pinVal = '';
+        }
+      }
+      // Also drop PIN if mobile/contact string already contains it
+      if (pinVal && mob) {
+        const pinEsc = pinVal.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        if (new RegExp(`(^|[\\s,;])${pinEsc}([\\s,;]|$)`).test(mob)) {
+          pinVal = '';
+        }
+      }
+
+      return cleanCommaSeparatedList([addr, mob, pinVal].filter(Boolean).join(', '));
     };
 
     for (let num = 1; num <= 3; num++) {
       const cnSuffix = `C${num}`;
       const explicitAddressContact = templateMappings[`Address Contact ${cnSuffix}`] || valueMap[`Address Contact ${cnSuffix}`];
-      templateMappings[`Address Contact ${cnSuffix}`] = explicitAddressContact || joinAddressContact(
+      // Rebuild when explicit value already duplicates PIN after mobile
+      let addressContactValue = explicitAddressContact;
+      if (isUsableMappedValue(addressContactValue)) {
+        const pinForCn = templateMappings[`PIN ${cnSuffix}`] || valueMap[`PIN ${cnSuffix}`] || '';
+        if (pinForCn && String(addressContactValue).split(String(pinForCn).trim()).length > 2) {
+          addressContactValue = '';
+        }
+      } else {
+        addressContactValue = '';
+      }
+      templateMappings[`Address Contact ${cnSuffix}`] = addressContactValue || joinAddressContact(
         templateMappings[`Address ${cnSuffix}`] || valueMap[`Address ${cnSuffix}`],
         templateMappings[`Mobile No ${cnSuffix}`] || valueMap[`Mobile No ${cnSuffix}`],
         templateMappings[`PIN ${cnSuffix}`] || valueMap[`PIN ${cnSuffix}`]
@@ -1428,6 +1713,12 @@ const mapCompanyValuesToTemplate = async (companyId, templatePath) => {
         valueMap[`Mobile No ${lhSuffix}`] || valueMap[`mobile_${lhSnake}`],
         `Mobile No ${lhSuffix}`
       );
+      const lhPin =
+        valueMap[`PIN ${lhSuffix}`] ||
+        valueMap[`pin_${lhSnake}`] ||
+        valueMap[`PIN LH${lhNum}`];
+      templateMappings[`PIN ${lhSuffix}`] =
+        lhPin && String(lhPin).trim() ? getValueOrPlaceholder(lhPin, `PIN ${lhSuffix}`) : '';
       templateMappings[`Age ${lhSuffix}`] = getValueOrPlaceholder(
         valueMap[`Age ${lhSuffix}`] || valueMap[`age_${lhSnake}`],
         `Age ${lhSuffix}`
@@ -1613,7 +1904,7 @@ const mapCompanyValuesToTemplate = async (companyId, templatePath) => {
     // 2. Initialize ALL template placeholders with empty strings to prevent undefined
     console.log('🔧 Initializing all template placeholders with empty strings...');
     const commonPlaceholders = [
-      'Company Name', 'Folio No', 'Total Shares',
+      'Company Name', 'Folio No', 'Total Shares', 'Face Value',
       'Date of Issue', 'Current Date', 'Today Date'
     ];
 
@@ -1719,48 +2010,23 @@ const mapCompanyValuesToTemplate = async (companyId, templatePath) => {
       }
     });
 
-    // Check for and fix PIN mapping issues
-    Object.keys(valueMap).forEach(key => {
-      if (key.includes('PIN C') && !key.includes('Bank PIN')) {
-        const value = valueMap[key];
-        
-        // Check if the PIN matches Bank PIN (common issue where bank PIN gets mapped to claimant PIN)
-        const bankPinKey = key.replace('PIN C', 'Bank PIN C');
-        const bankPinValue = valueMap[bankPinKey];
-        
-        if (bankPinValue && value === bankPinValue) {
-          console.log(`🚨 CRITICAL: Found bank PIN in claimant PIN field [${key}]: ${value}`);
-          console.log(`🚨 Bank PIN value matches claimant PIN - this is the mapping issue!`);
-          
-          // Try to find the correct claimant PIN
-          const correctClaimantPin = companyValues.find(cv => 
-            cv.caseField && 
-            (cv.caseField.field_key.toLowerCase().includes('pin c') || 
-             cv.caseField.field_key === `PIN ${key.match(/C\d+/)[0]}`) &&
-            cv.field_value && 
-            cv.field_value !== bankPinValue && // Ensure it's different from bank PIN
-            !cv.caseField.field_key.toLowerCase().includes('bank')
-          );
-          
-          if (correctClaimantPin) {
-            console.log(`✅ Found correct claimant PIN for ${key}: ${correctClaimantPin.field_value}`);
-            valueMap[key] = correctClaimantPin.field_value;
-          } else {
-            console.log(`❌ No correct claimant PIN found for ${key}, setting to empty`);
-            valueMap[key] = '';
-          }
-        }
-      }
-    });
+    // NOTE: Do NOT clear claimant PIN merely because it equals Bank PIN.
+    // Same PIN for residence and bank branch is common and was wiping ISR-5 [PIN C1].
 
     // MAJOR CLEANUP: Fix all mapping issues (same as case template controller)
     console.log('🔧 Starting comprehensive mapping cleanup for company templates...');
     
-    // 1. Fix PAN fields - they should ONLY contain PAN numbers
+    // 1. Fix PAN fields - they should ONLY contain PAN numbers (not "Name as per PAN")
+    const looksLikePanNumberCleanup = (v) =>
+      /^[A-Z]{5}[0-9]{4}[A-Z]$/i.test(String(v || '').trim());
     const panFields = ['PAN C1', 'PAN C2', 'PAN C3', 'pan_c1', 'pan_c2', 'pan_c3'];
     panFields.forEach(panField => {
       if (valueMap[panField]) {
         const currentValue = valueMap[panField];
+        if (looksLikePanNumberCleanup(currentValue)) {
+          valueMap[panField] = String(currentValue).trim().toUpperCase();
+          return;
+        }
         // Check if PAN field contains invalid data (names, addresses, etc.)
         if (currentValue.includes(' ') || 
             currentValue.includes('Bhagwan') || 
@@ -1769,27 +2035,32 @@ const mapCompanyValuesToTemplate = async (companyId, templatePath) => {
             currentValue.includes('Tryambak') ||
             currentValue.includes('Kulkarni') ||
             currentValue.includes('Hinjewadi') ||
-            currentValue.includes('Pune')) {
+            currentValue.includes('Pune') ||
+            !looksLikePanNumberCleanup(currentValue)) {
           
           console.log(`⚠️ PAN field ${panField} contains invalid value: ${currentValue}`);
           
-          // Find the correct PAN value from original data
+          // Find the correct PAN value from original data (exact PAN field key only)
           const correctPanValue = companyValues.find(cv => 
             cv.caseField && 
-            cv.caseField.field_key === panField && 
-            cv.field_value && 
-            cv.field_value.length >= 10 && // PAN should be at least 10 chars
-            !cv.field_value.includes(' ') &&
-            !cv.field_value.includes('Bhagwan') &&
-            !cv.field_value.includes('Prasad') &&
-            !cv.field_value.includes('Sushil') &&
-            !cv.field_value.includes('Tryambak') &&
-            !cv.field_value.includes('Kulkarni')
+            /^pan\s*c\d+$/i.test(String(cv.caseField.field_key || '').trim()) &&
+            !/name/i.test(cv.caseField.field_key) &&
+            String(cv.caseField.field_key).replace(/\s+/g, '').toLowerCase() ===
+              String(panField).replace(/\s+/g, '').toLowerCase() &&
+            looksLikePanNumberCleanup(cv.field_value)
+          ) || companyValues.find(cv =>
+            cv.caseField &&
+            /^pan\s*c\d+$/i.test(String(cv.caseField.field_key || '').trim()) &&
+            !/name/i.test(cv.caseField.field_key) &&
+            looksLikePanNumberCleanup(cv.field_value) &&
+            String(cv.caseField.field_key).toLowerCase().includes(
+              (String(panField).match(/c\d+/i) || [''])[0].toLowerCase()
+            )
           );
           
           if (correctPanValue) {
             console.log(`✅ Found correct PAN value for ${panField}: ${correctPanValue.field_value}`);
-            valueMap[panField] = correctPanValue.field_value;
+            valueMap[panField] = String(correctPanValue.field_value).trim().toUpperCase();
           } else {
             console.log(`❌ No correct PAN value found for ${panField}, setting to empty`);
             valueMap[panField] = '';
@@ -1895,6 +2166,7 @@ const generateMappingPreview = (valueMap, templatePath) => {
     // Company and shares
     'Company Name': ['company_name', 'company', 'corporate_name'],
     'Total Shares': ['total_shares', 'shares', 'number_of_shares'],
+    'Face Value': ['face_value', 'fv', 'facevalue', 'face_val'],
     'Folio No': ['folio_no', 'folio', 'folio_number'],
     
     // Securities details
@@ -2121,16 +2393,41 @@ const downloadPopulatedTemplate = async (req, res) => {
       
       // CRITICAL: For PIN fields, extract the C number to prevent cross-contamination
       // Don't allow PIN C1 to be used for PIN C2 or PIN C3
-      const pinMatch = normalized.match(/pin\s*c(\d+)/i);
+      const pinMatch = normalized.match(/(?:^|\b)(?:bank\s+)?pin\s*c(\d+)/i);
       const requiredCNumber = pinMatch ? pinMatch[1] : null;
+      const isBankPin = /\bbank\s+pin\b/i.test(normalized);
+      const isBankAddress = /\bbank\s+address\b|\bpostal\s+address\b/i.test(normalized);
+      const isClaimantAddress =
+        /\baddress\b/i.test(normalized) &&
+        !isBankAddress &&
+        !/\bcontact\b/i.test(normalized) &&
+        !/\bold\b/i.test(normalized);
+      const isBankAcNumber =
+        /\bbank\s+ac\b/i.test(normalized) &&
+        !/\btype\b/i.test(normalized) &&
+        !/\bopen\b/i.test(normalized);
+      const isBankAcType = /\bbank\s+ac\s+type\b|\bbank\s+account\s+type\b/i.test(normalized);
+
+      const keyFitsBankRules = (normalizedKey) => {
+        if (isBankPin && !/\bbank\s+pin\b/i.test(normalizedKey)) return false;
+        if (!isBankPin && requiredCNumber && /\bbank\s+pin\b/i.test(normalizedKey) && !/\bbank\b/.test(normalized.replace(/pin.*/, ''))) {
+          // claimant PIN must not match bank PIN keys
+          if (/^(?:pin\s*c\d+)/i.test(normalized) && /\bbank\s+pin\b/i.test(normalizedKey)) return false;
+        }
+        if (isBankAddress && !(/\bbank\s+address\b|\bpostal\s+address\b/i.test(normalizedKey))) return false;
+        if (isClaimantAddress && /\bbank\s+address\b|\bpostal\s+address\b/i.test(normalizedKey)) return false;
+        if (isBankAcNumber && (/\btype\b/i.test(normalizedKey) || !/\bbank\s+ac\b|\bbank\s+account\b/i.test(normalizedKey))) return false;
+        if (isBankAcType && !/\btype\b/i.test(normalizedKey)) return false;
+        return true;
+      };
       
       // First, try exact match (case-insensitive)
       for (const [key, value] of Object.entries(valueMap)) {
         if (normalizePlaceholderName(key) === normalized) {
           // For PIN fields, verify the C number matches
-          if (requiredCNumber) {
+          if (requiredCNumber && /\bpin\b/i.test(normalized)) {
             const keyPinMatch = normalizePlaceholderName(key).match(/pin\s*c(\d+)/i);
-            if (keyPinMatch && keyPinMatch[1] === requiredCNumber) {
+            if (keyPinMatch && keyPinMatch[1] === requiredCNumber && keyFitsBankRules(normalizePlaceholderName(key))) {
               return value;
             }
           } else {
@@ -2140,21 +2437,25 @@ const downloadPopulatedTemplate = async (req, res) => {
       }
       
       // Second, try partial match (contains the normalized name)
-      // BUT: For PIN fields, ensure C number matches exactly
+      // BUT: For PIN / Bank Address / Bank AC fields, keep keys from the correct family
       for (const [key, value] of Object.entries(valueMap)) {
         const normalizedKey = normalizePlaceholderName(key);
-        if (normalizedKey.includes(normalized) || normalized.includes(normalizedKey)) {
-          // For PIN fields, verify the C number matches exactly
-          if (requiredCNumber) {
-            const keyPinMatch = normalizedKey.match(/pin\s*c(\d+)/i);
-            if (keyPinMatch && keyPinMatch[1] === requiredCNumber) {
-              return value;
-            }
-            // Don't return if C numbers don't match
-            continue;
-          }
-          return value;
+        if (!(normalizedKey.includes(normalized) || normalized.includes(normalizedKey))) {
+          continue;
         }
+        if (!keyFitsBankRules(normalizedKey)) {
+          continue;
+        }
+        // For PIN fields, verify the C number matches exactly
+        if (requiredCNumber && /\bpin\b/i.test(normalized)) {
+          const keyPinMatch = normalizedKey.match(/pin\s*c(\d+)/i);
+          if (keyPinMatch && keyPinMatch[1] === requiredCNumber) {
+            return value;
+          }
+          // Don't return if C numbers don't match
+          continue;
+        }
+        return value;
       }
       
       return null;
