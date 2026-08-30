@@ -7,6 +7,13 @@ const PizZip = require('pizzip');
 const { COMPANY_WORKFLOW_STATUS } = require('../utils/reviewAssignment');
 const { recordCompanyStatusChange } = require('../utils/companyStatusHistory');
 const { postProcessDocxZip, cleanFormattedListText, sanitizeTemplateZip } = require('../utils/templateDocumentUtils');
+const {
+  applyCanonicalBankFields,
+  mergeClaimantBankFields,
+  resolveBankAccountNumber,
+  composeBankPostalAddress,
+} = require('../utils/bankFieldMapping');
+const { applyCanonicalRtaName, isRtaNameFieldKey, resolveRtaName } = require('../utils/rtaFieldMapping');
 
 // Utility function to clean undefined values from any object
 const cleanUndefinedValues = (obj) => {
@@ -147,6 +154,19 @@ const getValueOrPlaceholder = (value, fieldName) => {
     }
   }
   
+  // Bank account numbers: keep digits as-is (do not run list/date cleanup)
+  if (
+    fieldName &&
+    (/\bbank\s*ac\b/i.test(fieldName) ||
+      /\bbank\s*account(\s*number|\s*no)?\b/i.test(fieldName) ||
+      /\baccount\s*(number|no)\b/i.test(fieldName)) &&
+    !/\btype\b/i.test(fieldName) &&
+    !/\bopen\b/i.test(fieldName) &&
+    !/\bname\b/i.test(fieldName)
+  ) {
+    return value.toString().trim();
+  }
+
   // Clean the value of any undefined text
   let cleanedValue = value.toString().replace(/undefined|UNDEFINED|null|NULL/gi, '').trim();
 
@@ -450,6 +470,13 @@ const mapCompanyValuesToTemplate = async (companyId, templatePath) => {
     const valueMap = {};
     const allNameFields = {}; // Store all name fields for fallback (C fields)
     const allHFields = {}; // Store all H fields for fallback
+
+    // Always keep raw CompanyValue keys even when CaseField join is missing
+    companyValues.forEach(cv => {
+      if (cv.field_key && cv.field_value != null && String(cv.field_value).trim() !== '') {
+        valueMap[cv.field_key] = cv.field_value;
+      }
+    });
     
     companyValues.forEach(cv => {
       if (cv.caseField && cv.field_value) {
@@ -836,7 +863,7 @@ const mapCompanyValuesToTemplate = async (companyId, templatePath) => {
           if (!valueMap['Face Value']) valueMap['Face Value'] = cv.field_value;
           if (!valueMap['face_value']) valueMap['face_value'] = cv.field_value;
         }
-        if (key === 'rta name') {
+        if (isRtaNameFieldKey(key) || isRtaNameFieldKey(label)) {
           if (!valueMap['RTA Name']) valueMap['RTA Name'] = cv.field_value;
           if (!valueMap['rta_name']) valueMap['rta_name'] = cv.field_value;
         }
@@ -892,6 +919,19 @@ const mapCompanyValuesToTemplate = async (companyId, templatePath) => {
       }
     });
 
+    try {
+      const claimants = await models.Claimant.findAll({
+        where: { company_id: companyId },
+        order: [['claimant_number', 'ASC']]
+      });
+      mergeClaimantBankFields(valueMap, claimants);
+      console.log(`🏦 Merged bank fields from ${claimants.length} claimant record(s)`);
+    } catch (claimantMergeError) {
+      console.warn('Could not merge claimant bank fields:', claimantMergeError.message);
+    }
+    applyCanonicalBankFields(valueMap);
+    applyCanonicalRtaName(valueMap);
+
     // Add specific template placeholder mappings with helpful placeholders
     // Map the exact placeholders that appear in the Word templates
     const templateMappings = {
@@ -910,7 +950,7 @@ const mapCompanyValuesToTemplate = async (companyId, templatePath) => {
       'Date of Issue': getValueOrPlaceholder(valueMap['date_of_issue'] || valueMap['Date of Issue'], 'Date of Issue'),
       'Current Date': formatDate(new Date()),
       'Today Date': formatDate(new Date()),
-      'RTA Name': getValueOrPlaceholder(valueMap['rta_name'] || valueMap['RTA Name'], 'RTA Name'),
+      'RTA Name': getValueOrPlaceholder(resolveRtaName(valueMap), 'RTA Name'),
       'Total Dividend Amount': getValueOrPlaceholder(valueMap['total_dividend_amount'] || valueMap['Total Dividend Amount'], 'Total Dividend Amount'),
       'Financial Dividend Year': getValueOrPlaceholder(valueMap['financial_dividend_year'] || valueMap['Financial Dividend Year'], 'Financial Dividend Year'),
       'IEPF Dividends Details': getValueOrPlaceholder(valueMap['iepf_dividends_details'] || valueMap['IEPF Dividends Details'], 'IEPF Dividends Details'),
@@ -944,6 +984,7 @@ const mapCompanyValuesToTemplate = async (companyId, templatePath) => {
         jointHolderNumbers.add(match[1]);
       }
     });
+    ['1', '2', '3'].forEach((n) => jointHolderNumbers.add(n));
 
     // Add mappings for each joint holder
     jointHolderNumbers.forEach(num => {
@@ -1250,16 +1291,7 @@ const mapCompanyValuesToTemplate = async (companyId, templatePath) => {
         valueMap[`Bank Name ${cnSuffix}`] || valueMap[`bank_name_c${num}`],
         `Bank Name ${cnSuffix}`
       );
-      const bankAccountNumber =
-        valueMap[`Bank AC ${cnSuffix}`] ||
-        valueMap[`bank_ac_c${num}`] ||
-        valueMap[`bank_account_c${num}`] ||
-        valueMap[`bank_account_number_c${num}`] ||
-        valueMap[`Bank Account ${cnSuffix}`] ||
-        valueMap[`Bank Account Number ${cnSuffix}`] ||
-        valueMap[`Bank Account No ${cnSuffix}`] ||
-        valueMap[`Account Number ${cnSuffix}`] ||
-        valueMap[`Account No ${cnSuffix}`];
+      const bankAccountNumber = resolveBankAccountNumber(valueMap, num);
       templateMappings[`Bank AC ${cnSuffix}`] = getValueOrPlaceholder(
         bankAccountNumber,
         `Bank AC ${cnSuffix}`
@@ -1277,12 +1309,7 @@ const mapCompanyValuesToTemplate = async (companyId, templatePath) => {
         valueMap[`IFSC ${cnSuffix}`] || valueMap[`ifsc_c${num}`],
         `IFSC ${cnSuffix}`
       );
-      const bankAddressValue =
-        valueMap[`Bank Address ${cnSuffix}`] ||
-        valueMap[`bank_address_c${num}`] ||
-        valueMap[`Postal Address ${cnSuffix}`] ||
-        valueMap[`postal_address_c${num}`] ||
-        valueMap[`Bank Postal Address ${cnSuffix}`];
+      const bankAddressValue = composeBankPostalAddress(valueMap, num);
       templateMappings[`Bank Address ${cnSuffix}`] = getValueOrPlaceholder(
         bankAddressValue,
         `Bank Address ${cnSuffix}`
@@ -2327,7 +2354,7 @@ const downloadPopulatedTemplate = async (req, res) => {
     // Create a new zip file from the template
     const zip = new PizZip(templateBuffer);
     // Fix VML artifacts like strokecolor="black [3040]" before [ ] tag parsing
-    sanitizeTemplateZip(zip);
+    sanitizeTemplateZip(zip, { templateName: template.template_path });
     
     // Create docxtemplater instance with custom delimiters for square brackets
     const doc = new Docxtemplater(zip, {

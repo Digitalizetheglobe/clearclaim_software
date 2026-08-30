@@ -4,6 +4,8 @@ const path = require('path');
 const Docxtemplater = require('docxtemplater');
 const PizZip = require('pizzip');
 const { postProcessDocxZip, sanitizeTemplateZip } = require('../utils/templateDocumentUtils');
+const { applyCanonicalBankFields } = require('../utils/bankFieldMapping');
+const { applyCanonicalRtaName } = require('../utils/rtaFieldMapping');
 
 // Get all available templates
 const getAllTemplates = async (req, res) => {
@@ -171,8 +173,11 @@ const mapCaseValuesToTemplate = async (caseId, templatePath) => {
     // Create a mapping object for easy lookup
     const valueMap = {};
     
-    // First, map all direct field keys and labels
+    // First, map all direct field keys and labels (including keys with no CaseField join)
     caseValues.forEach(cv => {
+      if (cv.field_key && cv.field_value != null && String(cv.field_value).trim() !== '') {
+        if (!valueMap[cv.field_key]) valueMap[cv.field_key] = cv.field_value;
+      }
       if (cv.caseField) {
         const fieldValue = cv.field_value || ''; // Ensure never undefined
         // Map by field key (exact match)
@@ -436,6 +441,9 @@ const mapCaseValuesToTemplate = async (caseId, templatePath) => {
         }
       }
     });
+
+    applyCanonicalBankFields(valueMap);
+    applyCanonicalRtaName(valueMap);
     
     // Debug: Log final mapping count and check for conflicts
     console.log(`Created ${Object.keys(valueMap).length} total mappings`);
@@ -779,7 +787,7 @@ const downloadPopulatedTemplate = async (req, res) => {
 
     // Create a new zip file from the template
     const zip = new PizZip(templateBuffer);
-    sanitizeTemplateZip(zip);
+    sanitizeTemplateZip(zip, { templateName: templateName });
 
     // Create docxtemplater instance
     const doc = new Docxtemplater(zip, {

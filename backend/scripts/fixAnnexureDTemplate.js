@@ -34,14 +34,11 @@ function fixDocumentXml(xml) {
     '[Address Contact $1]</w:t></w:r>$2<w:t></w:t>'
   );
 
-  // Remove paragraphs that only contain a Mobile No placeholder
-  result = result.replace(
-    /<w:p[^>]*>([\s\S]*?)\[Mobile No (C\d+|LH\d+)\]([\s\S]*?)<\/w:p>/g,
-    (match, before, suffix, after) => {
-      const textOnly = (before + after).replace(/<[^>]+>/g, '').trim();
-      return textOnly ? match : '';
-    }
-  );
+  // Drop leftover [Mobile No LHn] only when Address Contact already exists.
+  // Do NOT delete <w:p>…</w:p> spans — a greedy paragraph match previously gutted LH6–LH10.
+  result = result.replace(/\[Mobile No (LH\d+)\]/g, (full, suffix) => {
+    return result.includes(`[Address Contact ${suffix}]`) ? '' : full;
+  });
 
   return result;
 }

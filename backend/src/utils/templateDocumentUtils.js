@@ -3,6 +3,86 @@
  * Addresses: redundant &&, trailing commas/&, empty "or or" patterns, blank table rows.
  */
 
+const fs = require('fs');
+const path = require('path');
+const PizZip = require('pizzip');
+
+const countWordTags = (xml, tag) => ({
+  open: (xml.match(new RegExp(`<${tag}(?:\\s[^>]*)?>`, 'g')) || []).length,
+  close: (xml.match(new RegExp(`</${tag}>`, 'g')) || []).length,
+});
+
+const isUnbalancedTableXml = (xml) => {
+  if (!xml) return false;
+  const tbl = countWordTags(xml, 'w:tbl');
+  const tr = countWordTags(xml, 'w:tr');
+  return tbl.open !== tbl.close || tr.open !== tr.close;
+};
+
+/**
+ * Annexure-D Individual Affidavit LH6–LH10 were gutted by a greedy <w:p> delete,
+ * leaving orphan </w:tbl>/</w:tr>. Rebuild deponent identity from the intact LH5 file.
+ */
+const replaceAnnexureDDeponentLh = (xml, fromNum, toNum) => {
+  if (!xml || fromNum === toNum) return xml;
+  const swap = (s) => s.replace(new RegExp(`LH${fromNum}(?!\\d)`, 'g'), `LH${toNum}`);
+  const tblRe = /<w:tbl\b[^>]*>[\s\S]*?<\/w:tbl>/g;
+  let out = '';
+  let last = 0;
+  let m;
+  while ((m = tblRe.exec(xml))) {
+    out += swap(xml.slice(last, m.index));
+    const table = m[0];
+    if (/Name of the Legal Heir/i.test(table)) {
+      out += table.replace(/\[Mobile No LH\d+\]/g, '');
+    } else {
+      out += swap(table);
+    }
+    last = m.index + m[0].length;
+  }
+  out += swap(xml.slice(last));
+  return out;
+};
+
+const repairGuttedAnnexureDLhZip = (zip, templateFileName) => {
+  const doc = zip && zip.files && zip.files['word/document.xml'];
+  if (!doc) return zip;
+  const xml = doc.asText();
+  if (!isUnbalancedTableXml(xml) && (xml.match(/<w:tbl(?:\s[^>]*)?>/g) || []).length > 0) {
+    return zip;
+  }
+
+  const m = String(templateFileName || '').match(
+    /Annexure-D \(Individual Affidavit\)_LH(\d+)/i
+  );
+  if (!m) return zip;
+  const n = Number(m[1]);
+  if (!n || n < 1 || n > 10 || n === 5) return zip;
+
+  const sourcePath = path.join(
+    __dirname,
+    '../../templates',
+    'Annexure-D (Individual Affidavit)_LH5_Template.docx'
+  );
+  if (!fs.existsSync(sourcePath)) return zip;
+
+  let sourceZip;
+  try {
+    sourceZip = new PizZip(fs.readFileSync(sourcePath));
+  } catch (err) {
+    console.warn('Could not load Annexure-D LH5 donor template:', err.message);
+    return zip;
+  }
+
+  Object.keys(sourceZip.files).forEach((filePath) => {
+    if (!/^word\/(document|header\d*|footer\d*)\.xml$/.test(filePath)) return;
+    const srcXml = sourceZip.files[filePath].asText();
+    zip.file(filePath, replaceAnnexureDDeponentLh(srcXml, 5, n));
+  });
+  console.log(`♻️ Rebuilt gutted ${path.basename(String(templateFileName))} from LH5 donor`);
+  return zip;
+};
+
 const isEmptyOrSeparatorOnly = (text) => {
   if (!text || typeof text !== 'string') return true;
   const trimmed = text.trim();
@@ -281,12 +361,42 @@ const isBlankHeirCell = (text) =>
 /** Cells that shouldn't keep an otherwise-empty claimant/heir row visible */
 const isInsignificantHeirDetailCell = (text) => {
   if (isBlankHeirCell(text)) return true;
-  const t = String(text || '').trim();
+  const t = String(text || '').replace(/^[,.\s&;]+|[,.\s&;]+$/g, '').trim();
+  if (!t) return true;
+  // Unreplaced leftover tags after empty C3/C2 (e.g. "[Age C3]")
+  if (/^\[[^\]]+\]$/.test(t)) return true;
+  if (/^(address|mobile no|age|pin|relation with deceased|deceased relation)(\s*c\d+)?$/i.test(t)) {
+    return true;
+  }
   // Lone Indian PIN / mobile leftovers after empty name
   if (/^\d{6}$/.test(t)) return true;
   if (/^\d{10}$/.test(t)) return true;
   if (/^(\d{6}|\d{10})(\s*,\s*(\d{6}|\d{10}))*$/.test(t)) return true;
   return false;
+};
+
+/**
+ * Annexure-F Claimants Details (4-col, no list numbers): hide C2/C3 when the
+ * name cell is blank. Leftover PIN/mobile from another claimant must not keep
+ * the empty row visible.
+ */
+const isEmptyClaimantDetailsRow = (rowContent) => {
+  const cells = [...rowContent.matchAll(/(<w:tc(?:\s[^>]*)?>)([\s\S]*?)(<\/w:tc>)/g)];
+  if (cells.length !== 4) return false;
+
+  const cellTexts = cells.map((c) => getRowText(c[2]).trim());
+  const joined = cellTexts.join(' ').toLowerCase();
+
+  if (/name of the claimant|name of the legal heir/i.test(joined)) return false;
+  if (/company\s*name|folio|securities\s*held|certificate\s*no|distinctive/i.test(joined)) {
+    return false;
+  }
+  if (/^age$/i.test(cellTexts[2]) && /relationship/i.test(cellTexts[3])) return false;
+
+  const nameEmpty = isBlankHeirCell(cellTexts[0]);
+  if (!nameEmpty) return false;
+
+  return cellTexts.slice(1).every((t) => isInsignificantHeirDetailCell(t));
 };
 
 /**
@@ -435,7 +545,7 @@ const isEmptySecuritiesDataRow = (rowContent) => {
  * Remove table rows that are empty or contain only separators after population.
  */
 const removeEmptyTableRows = (xml) => {
-  return xml.replace(/<w:tr(?:\s[^>]*)?>([\s\S]*?)<\/w:tr>/g, (fullMatch, rowContent) => {
+  const next = xml.replace(/<w:tr(?:\s[^>]*)?>([\s\S]*?)<\/w:tr>/g, (fullMatch, rowContent) => {
     // Preserve rows containing images, drawings, shapes, or textboxes
     if (/<w:(?:drawing|pict|object|txbxContent)/i.test(rowContent) || /<v:(?:shape|rect|textbox|group|line)/i.test(rowContent) || /<mc:AlternateContent/i.test(rowContent)) {
       return fullMatch;
@@ -445,6 +555,7 @@ const removeEmptyTableRows = (xml) => {
     if (
       isEmptyOrSeparatorOnly(rowText) ||
       isNumberedEmptyHeirRow(rowContent) ||
+      isEmptyClaimantDetailsRow(rowContent) ||
       isEmptyAccountHolderPanNameRow(rowContent) ||
       isEmptySecuritiesDataRow(rowContent)
     ) {
@@ -452,6 +563,8 @@ const removeEmptyTableRows = (xml) => {
     }
     return fullMatch;
   });
+  if (isUnbalancedTableXml(next)) return xml;
+  return next;
 };
 
 /**
@@ -806,6 +919,27 @@ const isFormBIndemnityXml = (xml) =>
   (/Form\s*-?\s*B/i.test(xml || '') || /Signature of All holder/i.test(xml || ''));
 
 /**
+ * Annexure-F Claimants Details: the C3 row was copied from C2, so contact
+ * used [Mobile No C2]. That leftover C2 mobile kept an empty C3 row visible.
+ * Also merge split [Relation with Deceased C3] so the tag resolves.
+ */
+const fixAnnexureFClaimantsC3Row = (xml) => {
+  if (!xml || !/Name as per Aadhar C3/.test(xml)) return xml;
+
+  return xml.replace(/<w:tr(?:\s[^>]*)?>([\s\S]*?)<\/w:tr>/g, (fullRow, rowContent) => {
+    const rowText = getRowText(rowContent);
+    if (!/Name as per Aadhar C3/.test(rowText)) return fullRow;
+
+    let updated = fullRow.replace(/\[Mobile No C2\]/g, '[Mobile No C3]');
+    updated = updated.replace(
+      /<w:t(\s[^>]*)?>\[<\/w:t><\/w:r>([\s\S]{0,500}?<w:t(?:\s[^>]*)?>)Relation with Deceased<\/w:t><\/w:r>[\s\S]{0,500}?<w:t(?:\s[^>]*)?>\s*C3\]<\/w:t><\/w:r>/,
+      '<w:t$1>[Relation with Deceased C3]</w:t></w:r>'
+    );
+    return updated;
+  });
+};
+
+/**
  * Form-B templates accidentally contain `strokecolor="black [3040]"` inside VML.
  * With `[`/`]` delimiters, docxtemplater treats `[3040]` as a tag and corrupts drawings
  * (Word "unreadable content" / floating boxes jumping onto body text).
@@ -815,8 +949,35 @@ const sanitizeTemplateXmlArtifacts = (xml) => {
   let result = xml
     .replace(/strokecolor="black\s*\[3040\]"/gi, 'strokecolor="black"')
     .replace(/strokecolor="([^"]*?)\s*\[3040\]"/gi, 'strokecolor="$1"');
+  result = fixAnnexureFClaimantsC3Row(result);
   result = fixIEPFIndemnityBondLayout(result);
+  result = ensureFormBRtaNamePlaceholder(result);
   return result;
+};
+
+/**
+ * Form-B Point 3 should read: [Company Name] / [RTA Name] (Company / RTA name).
+ * Several All/Multiple templates only have [Company Name] before that parenthetical.
+ */
+const ensureFormBRtaNamePlaceholder = (xml) => {
+  if (!xml || !/Company\s*\/\s*RTA name/i.test(xml)) return xml;
+
+  return xml.replace(
+    /(<w:t[^>]*>)(\[Company Name\])(<\/w:t><\/w:r>)([\s\S]{0,2500}?)(Company\s*\/\s*RTA name)/gi,
+    (full, open, tag, close, mid, paren) => {
+      if (/\[RTA Name\]/i.test(mid)) return full;
+      const midPlain = [...mid.matchAll(/<w:t[^>]*>([^<]*)<\/w:t>/g)]
+        .map((m) => m[1].replace(/&amp;/g, '&'))
+        .join('');
+      if (!/^[\s(]*$/.test(midPlain)) return full;
+      return (
+        `${open}${tag}${close}` +
+        '<w:r><w:t xml:space="preserve"> / </w:t></w:r>' +
+        '<w:r><w:t>[RTA Name]</w:t></w:r>' +
+        `${mid}${paren}`
+      );
+    }
+  );
 };
 
 /**
@@ -1175,8 +1336,14 @@ const defloatFormBLayoutAnchors = (xml) => {
 
 /**
  * Sanitize zip XML before Docxtemplater parses `[...]` tags.
+ * @param {object} zip PizZip instance
+ * @param {{ templateName?: string }} [options]
  */
-const sanitizeTemplateZip = (zip) => {
+const sanitizeTemplateZip = (zip, options = {}) => {
+  if (options.templateName) {
+    repairGuttedAnnexureDLhZip(zip, options.templateName);
+  }
+
   const xmlFiles = Object.keys(zip.files).filter((f) =>
     /^word\/(document|header\d*|footer\d*)\.xml$/.test(f)
   );
@@ -1269,10 +1436,14 @@ module.exports = {
   escapeXmlText,
   isEmptyOrSeparatorOnly,
   isEmptyAccountHolderPanNameRow,
+  isEmptyClaimantDetailsRow,
   removeEmptyTableRows,
   removeTrailingEmptyTableColumns,
   sanitizeTemplateXmlArtifacts,
   sanitizeTemplateZip,
+  ensureFormBRtaNamePlaceholder,
+  replaceAnnexureDDeponentLh,
+  repairGuttedAnnexureDLhZip,
   ensureFormBWitnessPageBreak,
   defloatFormBLayoutAnchors,
   postProcessDocumentXml,
