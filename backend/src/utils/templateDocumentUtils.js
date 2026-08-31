@@ -83,6 +83,38 @@ const repairGuttedAnnexureDLhZip = (zip, templateFileName) => {
   return zip;
 };
 
+/**
+ * Annexure-D deponent opener was copied from a header: Heading1 + a leading
+ * center-tab at 142 twips (~0.1in). Long populated names/addresses center on
+ * that point and overflow the left page edge in preview and Word.
+ */
+const fixAnnexureDDeponentAlignment = (xml) => {
+  if (!xml || !/do hereby solemnly affirm/i.test(xml)) {
+    return xml;
+  }
+
+  return xml.replace(/<w:p(\s[^>]*)?>([\s\S]*?)<\/w:p>/g, (full, attrs, inner) => {
+    const text = [...inner.matchAll(/<w:t[^>]*>([^<]*)<\/w:t>/g)].map((m) => m[1]).join('');
+    if (!/do hereby solemnly affirm/i.test(text)) return full;
+    if (/herein above|solemnly affirmed at/i.test(text)) return full;
+    if (!/Residing at|Name as per Aadhar/i.test(text)) return full;
+
+    const pPrMatch = inner.match(/<w:pPr\b[^>]*>[\s\S]*?<\/w:pPr>/);
+    let pPrXml = pPrMatch ? pPrMatch[0] : '<w:pPr></w:pPr>';
+    let rest = pPrMatch ? inner.slice(pPrMatch[0].length) : inner;
+
+    pPrXml = pPrXml.replace(/<w:tabs\b[^>]*>[\s\S]*?<\/w:tabs>/g, '');
+    pPrXml = pPrXml.replace(/<w:pStyle w:val="Heading1"\s*\/>/i, '<w:pStyle w:val="Default"/>');
+    if (/<w:ind\b/i.test(pPrXml)) {
+      pPrXml = pPrXml.replace(/<w:ind\b[^>]*\/?>/g, '<w:ind w:left="0" w:right="0"/>');
+    }
+
+    rest = rest.replace(/^(?:\s*<w:r\b[^>]*>(?:(?!<\/w:r>)[\s\S])*?<w:tab\s*\/>[\s\S]*?<\/w:r>)+/, '');
+
+    return `<w:p${attrs || ''}>${pPrXml}${rest}</w:p>`;
+  });
+};
+
 const isEmptyOrSeparatorOnly = (text) => {
   if (!text || typeof text !== 'string') return true;
   const trimmed = text.trim();
@@ -623,7 +655,7 @@ const cleanParagraphsInXml = (xml) => {
     const hasTabs = /<w:tab[\s/>]/i.test(pContent);
     const isLayoutPara =
       (hasTabs || / {3,}/.test(paraFullText) || /\u00A0{2,}/.test(paraFullText)) &&
-      /\b(day\s+of|deponent|solemnly\s+affirm|on\s+this)\b/i.test(paraFullText);
+      /\b(day\s+of|deponent|solemnly\s+affirmed\s+at|on\s+this)\b/i.test(paraFullText);
     if (isLayoutPara) {
       // Light cleanup only: strip undefined/null leftovers inside text nodes
       if (!/undefined|null/i.test(paraFullText)) {
@@ -952,6 +984,10 @@ const sanitizeTemplateXmlArtifacts = (xml) => {
   result = fixAnnexureFClaimantsC3Row(result);
   result = fixIEPFIndemnityBondLayout(result);
   result = ensureFormBRtaNamePlaceholder(result);
+  result = fixAffidavitCumIndemnityPlaceholders(result);
+  result = result.replace(/<w:lastRenderedPageBreak\b[^>]*\/?>/gi, '');
+  result = removeEmptyLayoutDrawings(result);
+  result = fixAnnexureDDeponentAlignment(result);
   return result;
 };
 
@@ -978,6 +1014,46 @@ const ensureFormBRtaNamePlaceholder = (xml) => {
       );
     }
   );
+};
+
+/**
+ * Affidavit-cum-Indemnity (Annexure-A) templates:
+ * - `[Name of the Company/RTA]` is an instructional label, not a data field.
+ *   Left as a tag it survives populate (screenshot leftover after RTA/Company).
+ * - `[Face Value ]` trailing space does not match mapped `Face Value`.
+ * - Title notes wrapped in [ ] are parsed as tags and get wiped or preserved.
+ */
+const fixAffidavitCumIndemnityPlaceholders = (xml) => {
+  if (!xml) return xml;
+
+  let result = xml.replace(
+    /\[Name of the Company\s*\/\s*RTA\]/gi,
+    '(Name of the Company/RTA)'
+  );
+
+  result = result.replace(/\[([^\]]+?)\]/g, (full, inner) => {
+    if (/</.test(inner)) return full;
+    const trimmed = String(inner).replace(/^\s+|\s+$/g, '');
+    if (!trimmed || trimmed === inner) return full;
+    return `[${trimmed}]`;
+  });
+
+  const isAffidavitBond =
+    /AFFIDAVIT-?CUM-?INDEMNITY/i.test(xml) ||
+    /Affidavit Cum Indemnity/i.test(xml) ||
+    /Format for Affidavit-cum-Indemnity/i.test(xml);
+  if (!isAffidavitBond) return result;
+
+  result = result.replace(
+    /\[For issuance of duplicate securities\]/gi,
+    'For issuance of duplicate securities'
+  );
+  result = result.replace(
+    /\[To be submitted in non-judicial stamp paper[^\]]*\]/gi,
+    (tag) => tag.slice(1, -1)
+  );
+
+  return result;
 };
 
 /**
@@ -1240,6 +1316,10 @@ const normalizeIEPFIndemnitySpacing = (xml) => {
  * After empty securities rows are removed, Form-B page-1 shortens and absolute
  * signature/address anchors land on page 1 over the intro paragraph.
  * Force the witness / signature block onto a fresh page.
+ *
+ * Stay inside a single paragraph. A document-wide `[\s\S]*?` match from the
+ * first `<w:p` to "IN WITNESS WHEREOF" inserted a page break at the top of
+ * Affidavit / Form-B templates, which docx-preview shows as a blank ghost page.
  */
 const ensureFormBWitnessPageBreak = (xml) => {
   if (!isFormBIndemnityXml(xml) || !/IN WITNESS WHEREOF/i.test(xml)) {
@@ -1247,7 +1327,7 @@ const ensureFormBWitnessPageBreak = (xml) => {
   }
 
   return xml.replace(
-    /(<w:p\b[^>]*>)((?:<w:pPr\b[^>]*>[\s\S]*?<\/w:pPr>)?)([\s\S]*?)(<w:t\b[^>]*>)(IN WITNESS WHEREOF)/i,
+    /(<w:p\b[^>]*>)((?:<w:pPr\b[^>]*>[\s\S]*?<\/w:pPr>)?)((?:(?!<\/w:p>)[\s\S])*?)(<w:t\b[^>]*>)(IN WITNESS WHEREOF)/i,
     (full, open, pPr, mid, tOpen, witness) => {
       if (/<w:br\b[^>]*w:type="page"/i.test(full)) {
         return full;
@@ -1255,6 +1335,52 @@ const ensureFormBWitnessPageBreak = (xml) => {
       return `${open}${pPr || ''}<w:r><w:br w:type="page"/></w:r>${mid}${tOpen}${witness}`;
     }
   );
+};
+
+/**
+ * Leftover empty floating rectangles (often named "Rectangles 18", sizeRel 0%)
+ * render in docx-preview as a blank white box above the first page.
+ * Only drop large empty shapes — keep checkboxes and signature-line boxes.
+ */
+const removeEmptyLayoutDrawings = (xml) => {
+  if (!xml || !/<wp:anchor\b/i.test(xml)) return xml;
+
+  const EMU_MIN = 1371600; // 1.5in — Affidavit leftover is ~3.8in x 2.5in
+
+  const hasVisibleContent = (inner) => {
+    const text = [...inner.matchAll(/<w:t[^>]*>([^<]*)<\/w:t>/g)]
+      .map((m) => m[1])
+      .join('')
+      .replace(/\s+/g, '');
+    if (text) return true;
+    return /<a:blip\b|<v:imagedata\b/i.test(inner);
+  };
+
+  const isGhostBox = (inner) => {
+    if (hasVisibleContent(inner)) return false;
+    const ext = (inner.match(/<wp:extent\b[^>]*\/?>/i) || [''])[0];
+    const cx = parseInt((ext.match(/cx="(\d+)"/) || [])[1] || '0', 10);
+    const cy = parseInt((ext.match(/cy="(\d+)"/) || [])[1] || '0', 10);
+    return cx >= EMU_MIN && cy >= EMU_MIN;
+  };
+
+  let result = xml.replace(/<mc:AlternateContent>([\s\S]*?)<\/mc:AlternateContent>/g, (block) => {
+    const anchorMatch = block.match(/<wp:anchor\b[^>]*>([\s\S]*?)<\/wp:anchor>/);
+    if (anchorMatch && isGhostBox(anchorMatch[1])) return '';
+    return block;
+  });
+
+  result = result.replace(/<wp:anchor\b[^>]*>([\s\S]*?)<\/wp:anchor>/g, (full, inner) =>
+    isGhostBox(inner) ? '' : full
+  );
+
+  result = result.replace(/<w:drawing>\s*<\/w:drawing>/g, '');
+  result = result.replace(
+    /<mc:AlternateContent>\s*<mc:Choice\b[^>]*>\s*<\/mc:Choice>\s*(?:<mc:Fallback\b[^>]*>[\s\S]*?<\/mc:Fallback>)?\s*<\/mc:AlternateContent>/g,
+    ''
+  );
+  result = result.replace(/<w:r\b[^>]*>\s*<\/w:r>/g, '');
+  return result;
 };
 
 /**
@@ -1442,10 +1568,13 @@ module.exports = {
   sanitizeTemplateXmlArtifacts,
   sanitizeTemplateZip,
   ensureFormBRtaNamePlaceholder,
+  fixAffidavitCumIndemnityPlaceholders,
   replaceAnnexureDDeponentLh,
   repairGuttedAnnexureDLhZip,
+  fixAnnexureDDeponentAlignment,
   ensureFormBWitnessPageBreak,
   defloatFormBLayoutAnchors,
+  removeEmptyLayoutDrawings,
   postProcessDocumentXml,
   postProcessDocxZip,
 };

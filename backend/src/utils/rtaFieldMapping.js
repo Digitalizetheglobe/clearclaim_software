@@ -25,6 +25,15 @@ const applyCanonicalRtaName = (valueMap) => {
     valueMap['RTA Name'] = name;
     valueMap['rta_name'] = name;
   }
+  const company = firstNonEmpty(
+    valueMap['Company Name'],
+    valueMap['company_name']
+  );
+  const composed = [name, company].filter(Boolean).join(' / ');
+  if (composed) {
+    valueMap['Name of the Company/RTA'] = composed;
+    valueMap['Name of the Company / RTA'] = composed;
+  }
   return valueMap;
 };
 

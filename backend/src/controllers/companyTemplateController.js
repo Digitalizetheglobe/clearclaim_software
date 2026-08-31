@@ -1916,6 +1916,21 @@ const mapCompanyValuesToTemplate = async (companyId, templatePath) => {
     templateMappings['distinctive numbers'] = distinctiveNumbersStr;
     templateMappings['Distinctive Numbers'] = distinctiveNumbersStr;
 
+    const rtaOrCompany = [
+      templateMappings['RTA Name'] || resolveRtaName(valueMap),
+      templateMappings['Company Name'] || valueMap['Company Name'] || valueMap['company_name'],
+    ]
+      .map((v) => (v == null ? '' : String(v).trim()))
+      .filter(Boolean)
+      .join(' / ');
+    if (rtaOrCompany) {
+      templateMappings['Name of the Company/RTA'] = rtaOrCompany;
+      templateMappings['Name of the Company / RTA'] = rtaOrCompany;
+    }
+    if (templateMappings['Face Value']) {
+      templateMappings['Face Value '] = templateMappings['Face Value'];
+    }
+
     // Merge template mappings with valueMap
     Object.assign(valueMap, templateMappings);
     
@@ -2368,10 +2383,17 @@ const downloadPopulatedTemplate = async (req, res) => {
         if (!part.module) {
           // Check if it's a known static field like Signature, Stamp, Photo, or just spaces
           const p = (part.value || '').trim().toLowerCase();
-          if (p === '' || /^\s*$/.test(p) || p === 'x' || p === '✓' || p === 'tick' || 
-              p.includes('signature') || p.includes('sign') || p.includes('stamp') || 
-              p.includes('photo') || p.includes('thumb') || p.includes('impression') ||
-              p.includes('witness') || p === 'date' || p === 'place') {
+          const isStatic =
+            p === '' ||
+            /^\s*$/.test(p) ||
+            p === 'x' ||
+            p === '✓' ||
+            p === 'tick' ||
+            p === 'date' ||
+            p === 'place' ||
+            (p.length < 48 &&
+              /\b(signature|sign|stamp|photo|thumb|impression|witness)\b/.test(p));
+          if (isStatic) {
             return '[' + part.value + ']'; // Preserve the original tag exactly
           }
           // For actual data placeholders that have no value, return empty string
@@ -2599,10 +2621,17 @@ const downloadPopulatedTemplate = async (req, res) => {
       uniquePlaceholders.forEach(placeholder => {
         // CRITICAL FIX: Don't map static placeholders to empty string, let nullGetter preserve them
         const p = placeholder.trim().toLowerCase();
-        if (p === '' || /^\s*$/.test(p) || p === 'x' || p === '✓' || p === 'tick' || 
-            p.includes('signature') || p.includes('sign') || p.includes('stamp') || 
-            p.includes('photo') || p.includes('thumb') || p.includes('impression') ||
-            p.includes('witness') || p === 'date' || p === 'place') {
+        const isStatic =
+          p === '' ||
+          /^\s*$/.test(p) ||
+          p === 'x' ||
+          p === '✓' ||
+          p === 'tick' ||
+          p === 'date' ||
+          p === 'place' ||
+          (p.length < 48 &&
+            /\b(signature|sign|stamp|photo|thumb|impression|witness)\b/.test(p));
+        if (isStatic) {
           return; // Skip static fields so docxtemplater's nullGetter preserves them
         }
         
