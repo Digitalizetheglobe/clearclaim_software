@@ -1817,7 +1817,7 @@ const caseFieldsData = [
   {
     field_key: "Financial Dividend Year",
     field_label: "Financial Dividend Year",
-    field_type: "number",
+    field_type: "text",
     field_category: "iepf_dividends",
     display_order: 246,
   },

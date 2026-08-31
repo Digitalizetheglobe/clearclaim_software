@@ -3,9 +3,23 @@ const fs = require('fs').promises;
 const path = require('path');
 const Docxtemplater = require('docxtemplater');
 const PizZip = require('pizzip');
-const { postProcessDocxZip, sanitizeTemplateZip } = require('../utils/templateDocumentUtils');
+const { postProcessDocxZip, sanitizeTemplateZip, isSelectableTemplateFile, toDisplayTemplateName, toPopulatedDownloadName } = require('../utils/templateDocumentUtils');
 const { applyCanonicalBankFields } = require('../utils/bankFieldMapping');
 const { applyCanonicalRtaName } = require('../utils/rtaFieldMapping');
+const { applyShareCertificateMappings, applyNameAsPerCertFallbacks } = require('../utils/shareCertificateMapping');
+
+const resolveExistingTemplateFile = async (templateName) => {
+  const templatesDir = path.join(__dirname, '../../templates');
+  const requested = path.basename(String(templateName || ''));
+  try {
+    await fs.access(path.join(templatesDir, requested));
+    return requested;
+  } catch {
+    const files = await fs.readdir(templatesDir);
+    const found = files.find((f) => f.toLowerCase() === requested.toLowerCase());
+    return found || requested;
+  }
+};
 
 // Get all available templates
 const getAllTemplates = async (req, res) => {
@@ -17,19 +31,10 @@ const getAllTemplates = async (req, res) => {
     // - Skip Word temp files (~$...)
     // - Skip backups
     // - Skip known "invalid" double-hyphen variants
-    const docxFiles = templateFiles.filter(file =>
-      file.endsWith('.docx') &&
-      !file.startsWith('~$') &&
-      !file.toLowerCase().includes('backup') &&
-      !file.includes('--')
-    );
+    const docxFiles = templateFiles.filter(isSelectableTemplateFile);
 
     const templates = docxFiles.map(file => {
-      const cleanName = file
-        .replace('_Template.docx', '')
-        .replace('.docx', '')
-        .replace(/_/g, ' ')
-        .trim();
+      const cleanName = toDisplayTemplateName(file);
 
       let category = 'general';
       
@@ -51,6 +56,8 @@ const getAllTemplates = async (req, res) => {
         category = 'name_mismatch';
       } else if (lower.includes('sh-13')) {
         category = 'sh13';
+      } else if (lower.includes('iepf')) {
+        category = 'iepf';
       }
 
       return {
@@ -88,7 +95,8 @@ const getAllTemplates = async (req, res) => {
 // Extract template content structure for preview
 const extractTemplateStructure = async (templatePath) => {
   try {
-    const templateFullPath = path.join(__dirname, '../../templates', templatePath);
+    const resolved = await resolveExistingTemplateFile(templatePath);
+    const templateFullPath = path.join(__dirname, '../../templates', resolved);
     const templateBuffer = await fs.readFile(templateFullPath);
     
     // Create a new zip file from the template
@@ -444,6 +452,8 @@ const mapCaseValuesToTemplate = async (caseId, templatePath) => {
 
     applyCanonicalBankFields(valueMap);
     applyCanonicalRtaName(valueMap);
+    applyShareCertificateMappings(valueMap);
+    applyNameAsPerCertFallbacks(valueMap);
     
     // Debug: Log final mapping count and check for conflicts
     console.log(`Created ${Object.keys(valueMap).length} total mappings`);
@@ -609,7 +619,8 @@ const mapCaseValuesToTemplate = async (caseId, templatePath) => {
     console.log(`✅ Final valueMap has ${Object.keys(valueMap).length} entries, all undefined values cleaned`);
 
     // Read the template file
-    const templateFullPath = path.join(__dirname, '../../templates', templatePath);
+    const resolved = await resolveExistingTemplateFile(templatePath);
+    const templateFullPath = path.join(__dirname, '../../templates', resolved);
     const templateContent = await fs.readFile(templateFullPath);
 
     return {
@@ -675,11 +686,12 @@ const generateMappingPreview = (valueMap, templatePath, templateStructure) => {
     populatedFields: Object.keys(valueMap).filter(key => valueMap[key] && valueMap[key].trim() !== '').length,
     emptyFields: Object.keys(valueMap).filter(key => !valueMap[key] || valueMap[key].trim() === '').length,
     templateStructure: {
-      name: templatePath.replace('_Template.docx', '').replace(/_/g, ' '),
-      category: templatePath.includes('Annexure-D') ? 'Individual Affidavit' : 
+      name: toDisplayTemplateName(templatePath),
+      category: /isr-/i.test(templatePath) ? 'ISR' :
+                templatePath.includes('Annexure-D') ? 'Individual Affidavit' : 
                 templatePath.includes('Form-A') ? 'Affidavit' :
                 templatePath.includes('Form-B') ? 'Indemnity' :
-                templatePath.includes('ISR-') ? 'ISR' : 'General',
+                'General',
       description: getTemplateDescription(templatePath),
       placeholders: templateStructure.placeholders || [],
       originalContent: templateStructure.textContent || '',
@@ -758,10 +770,11 @@ const downloadPopulatedTemplate = async (req, res) => {
     }
 
     // Map case values to template
-    const mappedTemplate = await mapCaseValuesToTemplate(caseId, templateName);
+    const resolvedName = await resolveExistingTemplateFile(templateName);
+    const mappedTemplate = await mapCaseValuesToTemplate(caseId, resolvedName);
 
     // Read the template file
-    const templatePath = path.join(__dirname, '../../templates', templateName);
+    const templatePath = path.join(__dirname, '../../templates', resolvedName);
 
     // Check if template file exists
     try {
@@ -859,7 +872,7 @@ const downloadPopulatedTemplate = async (req, res) => {
       }
 
       // Set response headers for file download
-      const filename = templateName.replace('_Template.docx', '_Populated.docx');
+      const filename = toPopulatedDownloadName(templateName);
       res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
       res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
       res.setHeader('Content-Length', buffer.length);
@@ -871,7 +884,7 @@ const downloadPopulatedTemplate = async (req, res) => {
       
       // If there's an error, return the original template
       const fileStream = require('fs').createReadStream(templatePath);
-      const filename = templateName.replace('_Template.docx', '_Original.docx');
+      const filename = toPopulatedDownloadName(templateName).replace('_Populated.docx', '_Original.docx');
       
       res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
       res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
@@ -892,7 +905,7 @@ const getTemplateStats = async (req, res) => {
   try {
     const templatesDir = path.join(__dirname, '../../templates');
     const templateFiles = await fs.readdir(templatesDir);
-    const docxFiles = templateFiles.filter(file => file.endsWith('.docx'));
+    const docxFiles = templateFiles.filter(isSelectableTemplateFile);
 
     // Count by category
     const categoryStats = {};

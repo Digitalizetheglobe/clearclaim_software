@@ -387,6 +387,30 @@ const isSignaturePlaceholderOnly = (text) => {
   return /^(x|✓|✔|☑|☐|□|■|_+|-+|\.+)$/i.test(t);
 };
 
+/** Header-only cells in ISR holder/signature tables (not real claimant data). */
+const isUnusedHolderColumnHeader = (text) =>
+  /^(?:security\s+)?holder\s*\d+(?:\s*\/\s*claimant)?$/i.test(String(text || '').trim());
+
+const isEmptyHolderTableCell = (text) => {
+  const t = String(text || '').trim();
+  if (isEmptyOrSeparatorOnly(t) || isSignaturePlaceholderOnly(t)) return true;
+  if (/^\[[^\]]+\]$/.test(t)) return true;
+  if (isUnusedHolderColumnHeader(t)) return true;
+  return false;
+};
+
+/**
+ * ISR-4 Section C: drop "Joint Holder (3)" when claimant 3 has no name.
+ */
+const isEmptyIsr4JointHolder3Row = (rowContent) => {
+  const cells = [...rowContent.matchAll(/(<w:tc(?:\s[^>]*)?>)([\s\S]*?)(<\/w:tc>)/g)];
+  if (cells.length < 2) return false;
+  const cellTexts = cells.map((c) => getRowText(c[2]).trim());
+  const label = cellTexts[0].replace(/\s+/g, ' ');
+  if (!/joint\s*holder\s*1?\s*\(\s*3\s*\)/i.test(label)) return false;
+  return cellTexts.slice(1).every((t) => isEmptyHolderTableCell(t));
+};
+
 const isBlankHeirCell = (text) =>
   isEmptyOrSeparatorOnly(text) || isSignaturePlaceholderOnly(text);
 
@@ -589,7 +613,8 @@ const removeEmptyTableRows = (xml) => {
       isNumberedEmptyHeirRow(rowContent) ||
       isEmptyClaimantDetailsRow(rowContent) ||
       isEmptyAccountHolderPanNameRow(rowContent) ||
-      isEmptySecuritiesDataRow(rowContent)
+      isEmptySecuritiesDataRow(rowContent) ||
+      isEmptyIsr4JointHolder3Row(rowContent)
     ) {
       return '';
     }
@@ -820,9 +845,15 @@ const cleanParagraphsInXml = (xml) => {
 
 /**
  * Remove trailing table columns that are completely empty across all rows.
+ * Skip tables with horizontally merged cells (gridSpan): ISR-4 Transposition
+ * certificate/DN rows span the last two columns, and treating "missing" cells
+ * as empty would delete the value column.
  */
 const removeTrailingEmptyTableColumns = (xml) => {
   return xml.replace(/<w:tbl>([\s\S]*?)<\/w:tbl>/g, (tableMatch, tableContent) => {
+    if (/<w:gridSpan w:val="[2-9]\d*"/i.test(tableContent)) {
+      return tableMatch;
+    }
     const rowMatches = [...tableContent.matchAll(/(<w:tr(?:\s[^>]*)?>)([\s\S]*?)(<\/w:tr>)/g)];
     if (rowMatches.length === 0) return tableMatch;
 
@@ -848,10 +879,7 @@ const removeTrailingEmptyTableColumns = (xml) => {
         if (hasMedia) return false;
 
         const t = String(row[colIdx].text || '').trim();
-        if (isEmptyOrSeparatorOnly(t)) return true;
-        // ISR-1 signature table: "Holder 2" / "Holder 3" headers count as empty
-        // when that holder has no name/address/PIN data in the column.
-        if (/^holder\s*\d+$/i.test(t)) return true;
+        if (isEmptyHolderTableCell(t)) return true;
         return false;
       });
       if (allEmptyInCol && colIdx === maxCols - 1 - trailingEmptyCols) {
@@ -976,11 +1004,90 @@ const fixAnnexureFClaimantsC3Row = (xml) => {
  * With `[`/`]` delimiters, docxtemplater treats `[3040]` as a tag and corrupts drawings
  * (Word "unreadable content" / floating boxes jumping onto body text).
  */
+/**
+ * ISR-4 Transposition Section C is stored as two tables split by a continuous
+ * section break (page-number restart). That cuts Joint Holder (3) / certificate
+ * rows onto the next page as an empty-looking fragment. Merge them and keep
+ * rows from splitting.
+ */
+const tablePlainText = (tableXml) =>
+  [...String(tableXml || '').matchAll(/<w:t[^>]*>([^<]*)<\/w:t>/g)]
+    .map((m) => m[1].replace(/&amp;/g, '&'))
+    .join('');
+
+const isIsr4SectionCHeadTable = (tableXml) => {
+  const p = tablePlainText(tableXml);
+  return (
+    /Name of the Company/i.test(p) &&
+    /Folio Number/i.test(p) &&
+    /First Holder/i.test(p) &&
+    !/Certificate\s*Numbers/i.test(p)
+  );
+};
+
+const isIsr4SectionCTailTable = (tableXml) => {
+  const p = tablePlainText(tableXml);
+  return /Certificate\s*Numbers/i.test(p) && /Distinctive\s*Numbers/i.test(p);
+};
+
+const addCantSplitToTableRows = (tableXml) =>
+  tableXml.replace(/<w:tr\b[^>]*>([\s\S]*?)<\/w:tr>/g, (row) => {
+    if (/<w:cantSplit\b/.test(row)) return row;
+    if (/<w:trPr[\s>/]/.test(row)) {
+      return row.replace(/<w:trPr(\s[^>]*)?>/, (pr) => `${pr}<w:cantSplit/>`);
+    }
+    return row.replace(/(<w:tr\b[^>]*>)/, '$1<w:trPr><w:cantSplit/></w:trPr>');
+  });
+
+const fixIsr4TranspositionSectionCTable = (xml) => {
+  if (!xml) return xml;
+  const plain = tablePlainText(xml);
+  if (!/Certificate\s*Numbers/i.test(plain) || !/Distinctive\s*Numbers/i.test(plain)) {
+    return xml;
+  }
+
+  let result = xml;
+
+  const tables = [];
+  const re = /<w:tbl\b[^>]*>[\s\S]*?<\/w:tbl>/g;
+  let match;
+  while ((match = re.exec(result))) {
+    tables.push({ start: match.index, end: match.index + match[0].length, xml: match[0] });
+  }
+
+  for (let i = 0; i < tables.length - 1; i++) {
+    if (!isIsr4SectionCHeadTable(tables[i].xml) || !isIsr4SectionCTailTable(tables[i + 1].xml)) {
+      continue;
+    }
+
+    const between = result.slice(tables[i].end, tables[i + 1].start);
+    const sectPr = (between.match(/<w:sectPr\b[\s\S]*?<\/w:sectPr>/) || [])[0] || '';
+    const tailXml = tables[i + 1].xml.replace(
+      /<w:t([^>]*)>Holder1<\/w:t>/g,
+      '<w:t$1>Holder</w:t>'
+    );
+    const tailRows = tailXml.match(/<w:tr\b[\s\S]*?<\/w:tr>/g) || [];
+    let merged = tables[i].xml.replace(/<\/w:tbl>\s*$/, `${tailRows.join('')}</w:tbl>`);
+    merged = addCantSplitToTableRows(merged);
+
+    const afterSect = sectPr ? `<w:p><w:pPr>${sectPr}</w:pPr></w:p>` : '';
+    result =
+      result.slice(0, tables[i].start) +
+      merged +
+      afterSect +
+      result.slice(tables[i + 1].end);
+    break;
+  }
+
+  return result;
+};
+
 const sanitizeTemplateXmlArtifacts = (xml) => {
   if (!xml) return xml;
   let result = xml
     .replace(/strokecolor="black\s*\[3040\]"/gi, 'strokecolor="black"')
     .replace(/strokecolor="([^"]*?)\s*\[3040\]"/gi, 'strokecolor="$1"');
+  result = fixIsr4TranspositionSectionCTable(result);
   result = fixAnnexureFClaimantsC3Row(result);
   result = fixIEPFIndemnityBondLayout(result);
   result = ensureFormBRtaNamePlaceholder(result);
@@ -1051,6 +1158,180 @@ const fixAffidavitCumIndemnityPlaceholders = (xml) => {
   result = result.replace(
     /\[To be submitted in non-judicial stamp paper[^\]]*\]/gi,
     (tag) => tag.slice(1, -1)
+  );
+
+  return result;
+};
+
+const iepfParaPlain = (paraXml) =>
+  [...String(paraXml || '').matchAll(/<w:t[^>]*>([^<]*)<\/w:t>/g)]
+    .map((m) => m[1].replace(/&amp;/g, '&'))
+    .join('');
+
+/**
+ * Official IEPF indemnity blanks:
+ *   Financial Year [year]
+ *   from (Name of company or Bank on the basis of CIN/BCIN) [company]
+ *   out of the IEPF by the Authority, I [claimant(s)]
+ *   son / daughter of [father(s)]
+ * Older sanitizes put company after the year and claimants before "out of".
+ */
+const placeIEPFIndemnityMappedFields = (xml, isMultiple) => {
+  if (!xml) return xml;
+  const nameInsert = isMultiple
+    ? '[Name as per PAN C1] &amp; [Name as per PAN C2] &amp; [Name as per PAN C3]'
+    : '[Name as per PAN C1]';
+
+  return xml.replace(/<w:p\b[^>]*>[\s\S]*?<\/w:p>/g, (para) => {
+    const text = iepfParaPlain(para);
+
+    if (
+      /\[Financial Dividend Year\]/i.test(text) &&
+      /\[Company Name\]/i.test(text) &&
+      !/CIN\/BCIN/i.test(text)
+    ) {
+      return para.replace(
+        /<w:r\b[^>]*>[\s\S]*?<w:t[^>]*>\s*\[Company Name\]\s*<\/w:t>[\s\S]*?<\/w:r>/gi,
+        ''
+      );
+    }
+
+    if (
+      /CIN\/BCIN/i.test(text) &&
+      /Name of company or Bank/i.test(text) &&
+      !/\[Company Name\]/i.test(text)
+    ) {
+      return para.replace(
+        /<\/w:p>$/i,
+        '<w:r><w:t xml:space="preserve"> </w:t></w:r><w:r><w:t>[Company Name]</w:t></w:r></w:p>'
+      );
+    }
+
+    const isAuthorityLine =
+      /out of the Investor Education/i.test(text) ||
+      (/\[Name as per PAN C1\]/i.test(text) && /\bI\s*$/i.test(text.trim()));
+    if (!isAuthorityLine) return para;
+
+    let next = para;
+    if (/\[Name as per PAN C1\]/i.test(text) && !/I\s*\[Name as per PAN C1\]/i.test(text)) {
+      next = next.replace(/<w:t([^>]*)>([^<]*)<\/w:t>/g, (full, attrs, t) => {
+        if (!/\[Name as per PAN C/i.test(t)) return full;
+        const kept = t
+          .replace(/\[Name as per PAN C[123]\]/gi, '')
+          .replace(/&amp;/gi, '')
+          .replace(/&/g, '')
+          .replace(/\s+/g, ' ')
+          .trim();
+        if (!kept) return `<w:t${attrs}></w:t>`;
+        const spaceAttr =
+          (kept.startsWith(' ') || kept.endsWith(' ')) && !/xml:space=/.test(attrs || '')
+            ? ' xml:space="preserve"'
+            : '';
+        return `<w:t${attrs}${spaceAttr}>${kept}</w:t>`;
+      });
+    }
+
+    const afterStrip = iepfParaPlain(next);
+    if (/I\s*\[Name as per PAN C1\]/i.test(afterStrip)) return next;
+
+    if (/<w:t[^>]*>I\s*<\/w:t>\s*<\/w:r>\s*<\/w:p>$/i.test(next)) {
+      return next.replace(
+        /(<w:t[^>]*>I\s*<\/w:t>)(\s*<\/w:r>\s*)(<\/w:p>)$/i,
+        `$1$2<w:r><w:t xml:space="preserve"> ${nameInsert}</w:t></w:r>$3`
+      );
+    }
+    return next.replace(
+      /<\/w:p>$/i,
+      `<w:r><w:t xml:space="preserve"> ${nameInsert}</w:t></w:r></w:p>`
+    );
+  });
+};
+
+const iepfParagraphRuns = (paraXml) => {
+  const inner = String(paraXml || '')
+    .replace(/^<w:p\b[^>]*>/, '')
+    .replace(/<\/w:p>$/, '');
+  return inner.replace(/^<w:pPr\b[^>]*>[\s\S]*?<\/w:pPr>/, '');
+};
+
+/**
+ * Original IEPF Word file is a 2-/3-column form with <w:br type="column"/>.
+ * After flattening to one column those column breaks become PAGE breaks in Word
+ * (address on page 1, "Rs" on page 2, share count on page 3, rest on page 4).
+ * Merge the legal body into one paragraph and drop spacer empties.
+ */
+const flattenIEPFIndemnityFlow = (xml) => {
+  if (!xml) return xml;
+  const visible = [...xml.matchAll(/<w:t[^>]*>([^<]*)<\/w:t>/g)]
+    .map((m) => m[1])
+    .join(' ')
+    .replace(/\s+/g, ' ');
+  if (!/Investor Education and Protection Fund Authority/i.test(visible)) return xml;
+  if (
+    !/Indemnity\s+Bond/i.test(visible) &&
+    !/In\s+consideration\s+of\s+the\s+payment/i.test(visible)
+  ) {
+    return xml;
+  }
+
+  let result = xml.replace(/<w:r\b[^>]*>\s*<w:br\b[^>]*w:type="column"[^>]*\/?>\s*<\/w:r>/gi, '');
+  result = result.replace(/<w:br\b[^>]*w:type="column"[^>]*\/?>/gi, '');
+
+  const collectParas = (docXml) => {
+    const list = [];
+    const re = /<w:p\b[^>]*>[\s\S]*?<\/w:p>/g;
+    let m;
+    while ((m = re.exec(docXml))) {
+      list.push({
+        full: m[0],
+        start: m.index,
+        end: m.index + m[0].length,
+        text: iepfParaPlain(m[0]).replace(/\s+/g, ' ').trim(),
+      });
+    }
+    return list;
+  };
+
+  const paras = collectParas(result);
+  const firstBody = paras.findIndex((p) =>
+    /In\s+consideration\s+of\s+the\s+payment/i.test(p.text)
+  );
+  const firstSig = paras.findIndex((p) => /^Signature$/i.test(p.text));
+
+  if (firstBody >= 0) {
+    const endIdx = firstSig > firstBody ? firstSig : paras.length;
+    const body = paras.slice(firstBody, endIdx).filter((p) => p.text);
+    if (body.length > 1) {
+      const spaceRun = '<w:r><w:t xml:space="preserve"> </w:t></w:r>';
+      let mergedInner = iepfParagraphRuns(body[0].full);
+      for (let i = 1; i < body.length; i += 1) {
+        mergedInner += spaceRun + iepfParagraphRuns(body[i].full);
+      }
+      mergedInner = mergedInner.replace(/<w:r\b[^>]*>\s*<w:br\b[^>]*\/?>\s*<\/w:r>/gi, '');
+      mergedInner = mergedInner.replace(/<w:br\b[^>]*\/?>/gi, '');
+      mergedInner = mergedInner.replace(/<w:tab\s*\/>/gi, '');
+
+      const open = body[0].full.match(/^<w:p\b[^>]*>/)[0];
+      let pPr = (body[0].full.match(/<w:pPr\b[^>]*>[\s\S]*?<\/w:pPr>/) || [''])[0];
+      pPr = pPr.replace(/<w:tabs\b[^>]*>[\s\S]*?<\/w:tabs>/gi, '');
+      pPr = pPr.replace(/<w:sectPr\b[^>]*>[\s\S]*?<\/w:sectPr>/gi, '');
+      const mergedPara = `${open}${pPr}${mergedInner}</w:p>`;
+      const blankPara = '<w:p><w:pPr><w:pStyle w:val="BodyText"/></w:pPr></w:p>';
+      result =
+        result.slice(0, paras[firstBody].start) +
+        mergedPara +
+        blankPara +
+        result.slice(paras[endIdx - 1].end);
+    }
+  }
+
+  // Consecutive empty spacer paragraphs (from the old form grid) → a single blank
+  result = result.replace(
+    /(?:<w:p\b[^>]*>\s*(?:<w:pPr\b[^>]*>[\s\S]*?<\/w:pPr>\s*)?(?:<w:r\b[^>]*>[\s\S]*?<\/w:r>\s*)*<\/w:p>\s*){2,}/g,
+    (block) => {
+      if (/<w:t[^>]*>[^<]*\S/.test(block)) return block;
+      return '<w:p><w:pPr><w:pStyle w:val="BodyText"/></w:pPr></w:p>';
+    }
   );
 
   return result;
@@ -1129,42 +1410,15 @@ const fixIEPFIndemnityBondLayout = (xml) => {
     }
   }
 
-  // Base IEPF template has neither year nor company in body (only in floats)
+  // Base IEPF template may only have the year in a float — keep it on the FY line
   if (!/\[Financial Dividend Year\]/i.test(plain)) {
     const next = result.replace(
       /(Financial Year <\/w:t>)(<\/w:r>)/i,
-      '$1$2<w:r><w:t>[Financial Dividend Year]</w:t></w:r><w:r><w:t xml:space="preserve"> </w:t></w:r><w:r><w:t>[Company Name]</w:t></w:r><w:r><w:t xml:space="preserve"> </w:t></w:r>'
+      '$1$2<w:r><w:t xml:space="preserve"> </w:t></w:r><w:r><w:t>[Financial Dividend Year]</w:t></w:r>'
     );
     if (next !== result) {
       result = next;
       plain = bodyPlain(result);
-    }
-  }
-
-  // After Financial Dividend Year → Company Name
-  if (!/\[Company Name\]/i.test(plain)) {
-    const next = result.replace(
-      /(Financial Dividend Year\]<\/w:t>)(<\/w:r>)/i,
-      '$1$2<w:r><w:t xml:space="preserve"> </w:t></w:r><w:r><w:t>[Company Name]</w:t></w:r><w:r><w:t xml:space="preserve"> </w:t></w:r>'
-    );
-    if (next !== result) {
-      result = next;
-      plain = bodyPlain(result);
-    }
-  }
-
-  // Before "out of the Investor" → claimant PAN name(s)
-  if (!/\[Name as per PAN C1\]/i.test(plain)) {
-    const nameInsert = isMultiple
-      ? '[Name as per PAN C1] &amp; [Name as per PAN C2] &amp; [Name as per PAN C3] '
-      : '[Name as per PAN C1] ';
-    const next = result.replace(/(<w:t[^>]*>)out(<\/w:t>)/i, `$1${nameInsert}out$2`);
-    if (next !== result) {
-      const probe = bodyPlain(next);
-      if (/\[Name as per PAN C1\][\s\S]{0,80}?out\s*of/i.test(probe)) {
-        result = next;
-        plain = probe;
-      }
     }
   }
 
@@ -1214,10 +1468,11 @@ const fixIEPFIndemnityBondLayout = (xml) => {
     result = result.replace(reAcrossRuns, '$1$2');
   });
 
+  // Official bond blanks: company after CIN/BCIN label; claimants after "I"
+  result = placeIEPFIndemnityMappedFields(result, isMultiple);
+
   // Ensure spaces around key placeholders before surrounding words
-  result = result.replace(/\[Company Name\]\s*from/gi, '[Company Name] from');
   result = result.replace(/\[Financial Dividend Year\](?=\[)/gi, '[Financial Dividend Year] ');
-  result = result.replace(/\[Name as per PAN C1\]\s*out/gi, '[Name as per PAN C1] out');
   result = result.replace(/\[Total Shares\]\s*being/gi, '[Total Shares] being');
   result = result.replace(/\[Total Dividend Amount\]\s*and/gi, '[Total Dividend Amount] and');
 
@@ -1227,6 +1482,7 @@ const fixIEPFIndemnityBondLayout = (xml) => {
   result = result.replace(/<w:drawing>\s*<\/w:drawing>/g, '');
   result = result.replace(/<w:r\b[^>]*>\s*<\/w:r>/g, '');
 
+  result = flattenIEPFIndemnityFlow(result);
   result = normalizeIEPFIndemnitySpacing(result);
 
   return result;
@@ -1512,12 +1768,73 @@ const fixGluedDeclarationVerbs = (xml) => {
 /**
  * Post-process document XML after docxtemplater render.
  */
+/**
+ * Rebuild IEPF multiple-claimant father clauses after list cleanup strips
+ * "&" before "son / daughter of", and drop empty C2/C3 slots.
+ */
+const rebuildIEPFFatherClauseText = (text) => {
+  if (!text || !/son\s*\/\s*daughter of/i.test(text)) return text;
+
+  const names = [];
+  const clauseRe =
+    /son\s*\/\s*daughter of\s*(.*?)(?=\s*(?:&amp;|&)?\s*son\s*\/\s*daughter of|\s*respectively\b|$)/gi;
+  let m;
+  while ((m = clauseRe.exec(text))) {
+    const name = decodeXmlText(m[1] || '')
+      .replace(/&amp;/gi, '&')
+      .replace(/[&]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .replace(/^respectively$/i, '')
+      .trim();
+    if (name) names.push(name);
+  }
+
+  const rebuilt =
+    names.length === 0
+      ? ''
+      : names.map((n) => `son / daughter of ${n}`).join(' & ') +
+        (names.length > 1 ? ' respectively' : '');
+
+  return text
+    .replace(/son\s*\/\s*daughter of[\s\S]*?(?=do hereby|to indemnify|$)/i, rebuilt ? `${rebuilt} ` : '')
+    .replace(/\s+/g, ' ')
+    .trim();
+};
+
+const rewriteParagraphPlainText = (paraXml, newText) => {
+  let used = false;
+  const escaped = escapeXmlText(newText);
+  return paraXml.replace(/<w:t([^>]*)>([^<]*)<\/w:t>/g, (_m, attrs) => {
+    if (used) return `<w:t${attrs}></w:t>`;
+    used = true;
+    const spaceAttr =
+      (escaped.startsWith(' ') || escaped.endsWith(' ')) && !/xml:space=/.test(attrs || '')
+        ? ' xml:space="preserve"'
+        : '';
+    return `<w:t${attrs}${spaceAttr}>${escaped}</w:t>`;
+  });
+};
+
+const cleanupIEPFIndemnityPopulatedXml = (xml) => {
+  if (!xml || !/Investor Education and Protection Fund Authority/i.test(xml)) return xml;
+
+  return xml.replace(/<w:p\b[^>]*>[\s\S]*?<\/w:p>/g, (para) => {
+    const text = iepfParaPlain(para);
+    if (!/son\s*\/\s*daughter of/i.test(text)) return para;
+    const cleaned = rebuildIEPFFatherClauseText(text);
+    if (cleaned === text.replace(/\s+/g, ' ').trim()) return para;
+    return rewriteParagraphPlainText(para, cleaned);
+  });
+};
+
 const postProcessDocumentXml = (xml) => {
   let result = xml;
   result = sanitizeTemplateXmlArtifacts(result);
   result = result.replace(/undefined|null/gi, '');
   result = normalizeOversizedBodyFonts(result);
   result = cleanParagraphsInXml(result); // Re-enabled with segmented logic to preserve formatting
+  result = cleanupIEPFIndemnityPopulatedXml(result);
+  result = flattenIEPFIndemnityFlow(result);
   result = normalizeIEPFIndemnitySpacing(result);
   result = fixGluedDeclarationVerbs(result);
   result = removeEmptyTableRows(result);
@@ -1528,6 +1845,7 @@ const postProcessDocumentXml = (xml) => {
   // overlaying page-1 body text (page break + convert floats to inline).
   result = ensureFormBWitnessPageBreak(result);
   result = defloatFormBLayoutAnchors(result);
+  result = fixIsr4TranspositionSectionCTable(result);
   return result;
 };
 
@@ -1556,6 +1874,45 @@ const postProcessDocxZip = (zip) => {
   return zip;
 };
 
+const isSelectableTemplateFile = (file) => {
+  if (!file || String(file).startsWith('~$')) return false;
+  if (!/\.docx$/i.test(file)) return false;
+  const lower = String(file).toLowerCase();
+  if (lower.includes('backup') || lower.includes('_restored')) return false;
+  if (String(file).includes('--')) return false;
+  return true;
+};
+
+const toDisplayTemplateName = (filename) => {
+  const raw = String(filename || '');
+  const lower = raw.toLowerCase();
+  if (lower.includes('form isr-4') && lower.includes('sebi')) {
+    return 'Form ISR-4 - SEBI Format';
+  }
+  if (lower.includes('form isr-4') && lower.includes('transposition')) {
+    return 'Form ISR-4 Transposition';
+  }
+  if (lower.includes('iepf') && lower.includes('indemnity')) {
+    if (lower.includes('multiple')) return 'Indemnity Bond IEPF - Multiple Claimant';
+    if (lower.includes('single')) return 'Indemnity Bond IEPF - Single Claimant';
+    return 'Indemnity Bond IEPF';
+  }
+  return raw
+    .replace(/_Template\.docx$/i, '')
+    .replace(/\.docx$/i, '')
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, (l) => l.toUpperCase())
+    .trim();
+};
+
+const toPopulatedDownloadName = (filename) => {
+  const base = String(filename || '').split(/[/\\]/).pop() || 'Template.docx';
+  if (/_Template\.docx$/i.test(base)) {
+    return base.replace(/_Template\.docx$/i, '_Populated.docx');
+  }
+  return base.replace(/\.docx$/i, '_Populated.docx');
+};
+
 module.exports = {
   cleanFormattedListText,
   decodeXmlText,
@@ -1577,4 +1934,8 @@ module.exports = {
   removeEmptyLayoutDrawings,
   postProcessDocumentXml,
   postProcessDocxZip,
+  isSelectableTemplateFile,
+  toDisplayTemplateName,
+  toPopulatedDownloadName,
+  fixIsr4TranspositionSectionCTable,
 };

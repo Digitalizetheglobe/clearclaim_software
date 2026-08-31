@@ -6,7 +6,7 @@ const Docxtemplater = require('docxtemplater');
 const PizZip = require('pizzip');
 const { COMPANY_WORKFLOW_STATUS } = require('../utils/reviewAssignment');
 const { recordCompanyStatusChange } = require('../utils/companyStatusHistory');
-const { postProcessDocxZip, cleanFormattedListText, sanitizeTemplateZip } = require('../utils/templateDocumentUtils');
+const { postProcessDocxZip, cleanFormattedListText, sanitizeTemplateZip, isSelectableTemplateFile, toDisplayTemplateName, toPopulatedDownloadName } = require('../utils/templateDocumentUtils');
 const {
   applyCanonicalBankFields,
   mergeClaimantBankFields,
@@ -14,6 +14,25 @@ const {
   composeBankPostalAddress,
 } = require('../utils/bankFieldMapping');
 const { applyCanonicalRtaName, isRtaNameFieldKey, resolveRtaName } = require('../utils/rtaFieldMapping');
+const {
+  applyShareCertificateMappings,
+  applyNameAsPerCertFallbacks,
+  resolveNameAsPerCert,
+} = require('../utils/shareCertificateMapping');
+
+const TEMPLATES_DIR = path.join(__dirname, '../../templates');
+const resolveCompanyTemplateFilePath = async (relativeName) => {
+  const requested = path.basename(String(relativeName || ''));
+  const direct = path.join(TEMPLATES_DIR, requested);
+  try {
+    await fs.access(direct);
+    return direct;
+  } catch {
+    const files = await fs.readdir(TEMPLATES_DIR);
+    const found = files.find((f) => f.toLowerCase() === requested.toLowerCase());
+    return path.join(TEMPLATES_DIR, found || requested);
+  }
+};
 
 // Utility function to clean undefined values from any object
 const cleanUndefinedValues = (obj) => {
@@ -225,20 +244,15 @@ const categorizeTemplate = (filename) => {
     return 'ISR_FORMS';
   } else if (lowerFilename.includes('annexure')) {
     return 'ANNEXURES';
+  } else if (lowerFilename.includes('iepf')) {
+    return 'IEPF';
   } else {
     return 'OTHER';
   }
 };
 
 // Helper function to clean template name
-const cleanTemplateName = (filename) => {
-  return filename
-    .replace('_Template.docx', '')
-    .replace('.docx', '')
-    .replace(/_/g, ' ')
-    .replace(/\b\w/g, l => l.toUpperCase())
-    .trim();
-};
+const cleanTemplateName = (filename) => toDisplayTemplateName(filename);
 
 // Get all available templates for a company
 const getCompanyTemplates = async (req, res) => {
@@ -268,24 +282,21 @@ const getCompanyTemplates = async (req, res) => {
       // Scan templates directory
       const templatesDir = path.join(__dirname, '../../templates');
       const templateFiles = await fs.readdir(templatesDir);
-      const docxFiles = templateFiles.filter(file =>
-        file.endsWith('.docx') &&
-        !file.startsWith('~$') &&
-        !file.toLowerCase().includes('backup') &&
-        !file.includes('--')
-      );
+      const docxFiles = templateFiles.filter(isSelectableTemplateFile);
       
       console.log(`Found ${docxFiles.length} template files in directory`);
       
       // Get existing template filenames from database
-      const existingTemplatePaths = new Set(allTemplates.map(t => t.template_path));
+      const existingTemplatePaths = new Set(
+        allTemplates.map((t) => String(t.template_path || '').toLowerCase())
+      );
       
       // Find new templates that exist in filesystem but not in database
       const newTemplateRecords = [];
       
       for (const file of docxFiles) {
         // Skip if this template already exists in database
-        if (existingTemplatePaths.has(file)) {
+        if (existingTemplatePaths.has(String(file).toLowerCase())) {
           continue;
         }
         
@@ -304,6 +315,19 @@ const getCompanyTemplates = async (req, res) => {
           selected_by: null,
           selected_at: null
         });
+      }
+
+      for (const existing of allTemplates) {
+        const file = path.basename(String(existing.template_path || ''));
+        if (!/iepf/i.test(file)) continue;
+        const nextName = cleanTemplateName(file);
+        const nextCategory = categorizeTemplate(file);
+        if (existing.template_name !== nextName || existing.template_category !== nextCategory) {
+          await CompanyTemplate.update(
+            { template_name: nextName, template_category: nextCategory },
+            { where: { id: existing.id } }
+          );
+        }
       }
       
       // Bulk create new templates for this company
@@ -867,11 +891,23 @@ const mapCompanyValuesToTemplate = async (companyId, templatePath) => {
           if (!valueMap['RTA Name']) valueMap['RTA Name'] = cv.field_value;
           if (!valueMap['rta_name']) valueMap['rta_name'] = cv.field_value;
         }
-        if (key === 'total dividend amount') {
+        if (
+          key === 'total dividend amount' ||
+          key === 'total_dividend_amount' ||
+          key === 'total dividend' ||
+          key === 'dividend amount' ||
+          key === 'iepf dividend amount'
+        ) {
           if (!valueMap['Total Dividend Amount']) valueMap['Total Dividend Amount'] = cv.field_value;
           if (!valueMap['total_dividend_amount']) valueMap['total_dividend_amount'] = cv.field_value;
         }
-        if (key === 'financial dividend year') {
+        if (
+          key === 'financial dividend year' ||
+          key === 'financial_dividend_year' ||
+          key === 'dividend year' ||
+          key === 'iepf financial year' ||
+          key === 'financial year'
+        ) {
           if (!valueMap['Financial Dividend Year']) valueMap['Financial Dividend Year'] = cv.field_value;
           if (!valueMap['financial_dividend_year']) valueMap['financial_dividend_year'] = cv.field_value;
         }
@@ -951,8 +987,20 @@ const mapCompanyValuesToTemplate = async (companyId, templatePath) => {
       'Current Date': formatDate(new Date()),
       'Today Date': formatDate(new Date()),
       'RTA Name': getValueOrPlaceholder(resolveRtaName(valueMap), 'RTA Name'),
-      'Total Dividend Amount': getValueOrPlaceholder(valueMap['total_dividend_amount'] || valueMap['Total Dividend Amount'], 'Total Dividend Amount'),
-      'Financial Dividend Year': getValueOrPlaceholder(valueMap['financial_dividend_year'] || valueMap['Financial Dividend Year'], 'Financial Dividend Year'),
+      'Total Dividend Amount': getValueOrPlaceholder(
+        valueMap['total_dividend_amount'] ||
+          valueMap['Total Dividend Amount'] ||
+          valueMap['Total Dividend'] ||
+          valueMap['Dividend Amount'],
+        'Total Dividend Amount'
+      ),
+      'Financial Dividend Year': getValueOrPlaceholder(
+        valueMap['financial_dividend_year'] ||
+          valueMap['Financial Dividend Year'] ||
+          valueMap['Dividend Year'] ||
+          valueMap['Financial Year'],
+        'Financial Dividend Year'
+      ),
       'IEPF Dividends Details': getValueOrPlaceholder(valueMap['iepf_dividends_details'] || valueMap['IEPF Dividends Details'], 'IEPF Dividends Details'),
       'Company Address': getValueOrPlaceholder(valueMap['company_address'] || valueMap['Company Address'], 'Company Address'),
       'Occupation C1': getValueOrPlaceholder(valueMap['occupation_c1'] || valueMap['Occupation C1'], 'Occupation C1'),
@@ -1122,9 +1170,10 @@ const mapCompanyValuesToTemplate = async (companyId, templatePath) => {
         `Name as per Succession/WILL/LHA ${cnSuffix}`
       );
       templateMappings[`Name as per Cert ${cnSuffix}`] = getValueOrPlaceholder(
-        valueMap[`Name as per Cert ${cnSuffix}`], 
+        resolveNameAsPerCert(valueMap, num),
         `Name as per Cert ${cnSuffix}`
       );
+      templateMappings[`Name as per Certificate ${cnSuffix}`] = templateMappings[`Name as per Cert ${cnSuffix}`];
       const looksLikePanNumber = (v) => {
         const s = String(v || '').trim().toUpperCase();
         return /^[A-Z]{5}[0-9]{4}[A-Z]$/.test(s);
@@ -1796,125 +1845,12 @@ const mapCompanyValuesToTemplate = async (companyId, templatePath) => {
       'Date of demise'
     );
 
-    // Dynamically add mappings for Share Certificate fields (SC1-SC10)
-    // Find all unique SC numbers from the valueMap
-    const scNumbers = new Set();
-    Object.keys(valueMap).forEach(key => {
-      // Match SC, DN, NOS, SC Status, and Year of Purchase fields
-      // CRITICAL FIX: Handle both "Year of Purchase1" (no space) and "Year of Purchase 1" (with space)
-      const scMatch = key.match(/^SC(\d+)$/i) || 
-                      key.match(/^DN(\d+)$/i) || 
-                      key.match(/^NOS(\d+)$/i) || 
-                      key.match(/SC\s*Status(\d+)/i) ||
-                      key.match(/Year\s*of\s*Purchase\s*(\d+)/i); // Matches both "Purchase1" and "Purchase 1"
-      if (scMatch) {
-        scNumbers.add(scMatch[1]);
-      }
-    });
-
-    // Add mappings for each Share Certificate (SC1-SC10)
-    // For SC fields: if no data exists, use empty string (not placeholder) to avoid showing rows with placeholder text
-    for (let i = 1; i <= 10; i++) {
-      const scSuffix = i.toString();
-      
-      // Helper function to get SC value or empty string (not placeholder)
-      const getSCValueOrEmpty = (value) => {
-        if (!value || 
-            value === 'undefined' || 
-            value === 'null' || 
-            value === 'UNDEFINED' || 
-            value === 'NULL' ||
-            (typeof value === 'string' && value.trim() === '')) {
-          return ''; // Return empty string for SC fields when no data
-        }
-        const cleanedValue = value.toString().replace(/undefined|UNDEFINED|null|NULL/gi, '').trim();
-        return cleanedValue || '';
-      };
-      
-      // SC field - apply cleanup to remove commas and "&"
-      const scValue = valueMap[`SC${scSuffix}`] || valueMap[`sc${scSuffix}`];
-      let cleanedSC = getSCValueOrEmpty(scValue);
-      // Clean up any trailing commas, "&", etc. from SC values
-      if (cleanedSC && typeof cleanedSC === 'string') {
-        cleanedSC = cleanedSC.replace(/[,.\s]*&[\s,]*$/g, '').replace(/[,.\s]+$/g, '').trim();
-        if (cleanedSC === '' || cleanedSC === '&' || cleanedSC.match(/^[,.\s&]+$/)) {
-          cleanedSC = '';
-        }
-      }
-      templateMappings[`SC${scSuffix}`] = cleanedSC;
-      
-      // DN (Distinctive Number) field - apply cleanup to remove commas and "&"
-      const dnValue = valueMap[`DN${scSuffix}`] || valueMap[`dn${scSuffix}`];
-      let cleanedDN = getSCValueOrEmpty(dnValue);
-      // Clean up any trailing commas, "&", etc. from DN values
-      if (cleanedDN && typeof cleanedDN === 'string') {
-        cleanedDN = cleanedDN.replace(/[,.\s]*&[\s,]*$/g, '').replace(/[,.\s]+$/g, '').trim();
-        if (cleanedDN === '' || cleanedDN === '&' || cleanedDN.match(/^[,.\s&]+$/)) {
-          cleanedDN = '';
-        }
-      }
-      templateMappings[`DN${scSuffix}`] = cleanedDN;
-      
-      // NOS (Number of Securities) field
-      const nosValue = valueMap[`NOS${scSuffix}`] || valueMap[`nos${scSuffix}`];
-      templateMappings[`NOS${scSuffix}`] = getSCValueOrEmpty(nosValue);
-      
-      // SC Status field
-      const statusValue = valueMap[`SC Status${scSuffix}`] || valueMap[`sc_status${scSuffix}`];
-      templateMappings[`SC Status${scSuffix}`] = getSCValueOrEmpty(statusValue);
-      
-      // Year of Purchase - only for SC1
-      // CRITICAL FIX: Template uses "Year of Purchase 1" (with space), but database stores "Year of Purchase1" (without space)
-      // Map to both formats to ensure matching
-      if (i === 1) {
-        const yopValue = valueMap[`Year of Purchase${scSuffix}`] || 
-                        valueMap[`Year of Purchase ${scSuffix}`] || 
-                        valueMap[`year_of_purchase${scSuffix}`] ||
-                        valueMap[`year_of_purchase_${scSuffix}`];
-        const finalYopValue = getSCValueOrEmpty(yopValue);
-        
-        // Map to both formats: with space and without space
-        templateMappings[`Year of Purchase${scSuffix}`] = finalYopValue; // "Year of Purchase1" (no space)
-        templateMappings[`Year of Purchase ${scSuffix}`] = finalYopValue; // "Year of Purchase 1" (with space) - template format
-        console.log(`✅ Mapped Year of Purchase for SC1: "${finalYopValue}" (both formats)`);
-      }
+    // Share certificates SC1–SC19 (SEBI ISR-4 uses SC11–SC13) plus combined lists
+    applyShareCertificateMappings(valueMap, templateMappings);
+    applyNameAsPerCertFallbacks(valueMap, templateMappings);
+    if (templateMappings['Year of Purchase 1']) {
+      console.log(`✅ Mapped Year of Purchase for SC1: "${templateMappings['Year of Purchase 1']}" (both formats)`);
     }
-
-    // Build combined certificate numbers and distinctive numbers for ISR-4 template
-    // These are comma-separated lists built from SC1-SC10 and DN1-DN10
-    const certificateNumbers = [];
-    const distinctiveNumbers = [];
-    
-    for (let i = 1; i <= 10; i++) {
-      const scValue = templateMappings[`SC${i}`];
-      const dnValue = templateMappings[`DN${i}`];
-      
-      // Only add non-empty SC values to certificate numbers list
-      if (scValue && scValue.trim() !== '' && scValue !== '&' && !scValue.match(/^[,.\s&]+$/)) {
-        certificateNumbers.push(scValue.trim());
-      }
-      
-      // Only add non-empty DN values to distinctive numbers list
-      if (dnValue && dnValue.trim() !== '' && dnValue !== '&' && !dnValue.match(/^[,.\s&]+$/)) {
-        distinctiveNumbers.push(dnValue.trim());
-      }
-    }
-    
-    // Create cleaned comma-separated strings (no trailing commas or "&")
-    const certificateNumbersStr = certificateNumbers.length > 0 
-      ? certificateNumbers.join(', ') 
-      : '';
-    const distinctiveNumbersStr = distinctiveNumbers.length > 0 
-      ? distinctiveNumbers.join(', ') 
-      : '';
-    
-    // Map to common placeholder names used in ISR-4 template
-    templateMappings['Certificate numbers'] = certificateNumbersStr;
-    templateMappings['certificate numbers'] = certificateNumbersStr;
-    templateMappings['Certificate Numbers'] = certificateNumbersStr;
-    templateMappings['Distinctive numbers'] = distinctiveNumbersStr;
-    templateMappings['distinctive numbers'] = distinctiveNumbersStr;
-    templateMappings['Distinctive Numbers'] = distinctiveNumbersStr;
 
     const rtaOrCompany = [
       templateMappings['RTA Name'] || resolveRtaName(valueMap),
@@ -2167,7 +2103,7 @@ const mapCompanyValuesToTemplate = async (companyId, templatePath) => {
     console.log(`🗺️ Final value map:`, valueMap);
 
     // Read the template file
-    const templateFullPath = path.join(__dirname, '../../templates', templatePath);
+    const templateFullPath = await resolveCompanyTemplateFilePath(templatePath);
     const templateContent = await fs.readFile(templateFullPath);
 
     // For now, we'll return the template with a mapping preview
@@ -2275,7 +2211,7 @@ const downloadTemplate = async (req, res) => {
     }
 
     // Read the original template file
-    const templatePath = path.join(__dirname, '../../templates', template.template_path);
+    const templatePath = await resolveCompanyTemplateFilePath(template.template_path);
     
     // Check if template file exists
     try {
@@ -2342,7 +2278,7 @@ const downloadPopulatedTemplate = async (req, res) => {
     const mappedTemplate = await mapCompanyValuesToTemplate(companyId, template.template_path);
     
     // Read the template file
-    const templatePath = path.join(__dirname, '../../templates', template.template_path);
+    const templatePath = await resolveCompanyTemplateFilePath(template.template_path);
     
     // Check if template file exists
     try {
@@ -3017,7 +2953,7 @@ const downloadPopulatedTemplate = async (req, res) => {
     }
     
     // Set headers for file download
-    const filename = template.template_path.split('/').pop().replace('_Template.docx', '_Populated.docx');
+    const filename = toPopulatedDownloadName(template.template_path);
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     res.setHeader('Content-Length', populatedBuffer.length);

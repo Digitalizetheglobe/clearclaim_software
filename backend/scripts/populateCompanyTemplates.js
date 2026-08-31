@@ -3,8 +3,8 @@ const CompanyTemplate = require('../src/models/CompanyTemplate')(sequelize);
 const Company = require('../src/models/Company')(sequelize);
 const path = require('path');
 const fs = require('fs').promises;
+const { isSelectableTemplateFile, toDisplayTemplateName } = require('../src/utils/templateDocumentUtils');
 
-// Helper function to categorize templates
 const categorizeTemplate = (filename) => {
   const lowerFilename = filename.toLowerCase();
   
@@ -18,20 +18,14 @@ const categorizeTemplate = (filename) => {
     return 'ISR_FORMS';
   } else if (lowerFilename.includes('annexure')) {
     return 'ANNEXURES';
+  } else if (lowerFilename.includes('iepf')) {
+    return 'IEPF';
   } else {
     return 'OTHER';
   }
 };
 
-// Helper function to clean template name
-const cleanTemplateName = (filename) => {
-  return filename
-    .replace('_Template.docx', '')
-    .replace('.docx', '')
-    .replace(/_/g, ' ')
-    .replace(/\b\w/g, l => l.toUpperCase())
-    .trim();
-};
+const cleanTemplateName = (filename) => toDisplayTemplateName(filename);
 
 const populateCompanyTemplates = async () => {
   try {
@@ -49,7 +43,7 @@ const populateCompanyTemplates = async () => {
     // Scan templates directory
     const templatesDir = path.join(__dirname, '../templates');
     const templateFiles = await fs.readdir(templatesDir);
-    const docxFiles = templateFiles.filter(file => file.endsWith('.docx'));
+    const docxFiles = templateFiles.filter(isSelectableTemplateFile);
     
     console.log(`Found ${docxFiles.length} template files`);
     

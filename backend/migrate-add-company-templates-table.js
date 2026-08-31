@@ -55,6 +55,8 @@ async function createCompanyTemplatesTable() {
       
       // DUP Templates
       { name: 'ISR4', category: 'DUP', path: 'ISR-4_Template.docx' },
+      { name: 'Form ISR-4 - SEBI Format', category: 'ISR_FORMS', path: 'Form ISR-4 - SEBI Format_Template.DOCX' },
+      { name: 'Form ISR-4 Transposition', category: 'ISR_FORMS', path: 'Form ISR-4_Transposition.docx' },
       
       // Form A Templates
       { name: 'Form A - Self Single', category: 'FORM_A', path: 'Form-A (Affidavit)- SELF_Single_Template.docx' },
