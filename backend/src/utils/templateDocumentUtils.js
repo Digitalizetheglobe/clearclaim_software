@@ -1105,11 +1105,30 @@ const fixIsr4TranspositionSectionCTable = (xml) => {
   return result;
 };
 
+/**
+ * Word sometimes leaves a lone "[" run immediately before a real "[Name …]"
+ * tag (visible as "We [[Name as per Aadhar C1]"). docxtemplater then throws
+ * Duplicate open tag and preview/download fails.
+ */
+const collapseDuplicateOpenBracketRuns = (xml) => {
+  if (!xml) return xml;
+  let result = xml.replace(/(<w:t\b[^>]*>)(\s*)\[(\[)/g, '$1$2$3');
+  result = result.replace(
+    /(<w:t\b[^>]*>)(\s*\[\s*)(<\/w:t>)((?:(?!<\/w:p>)[\s\S]){0,500}?)(<w:t\b[^>]*>)(\s*\[)/g,
+    (full, open1, text1, close1, mid, open2, text2) => {
+      if (String(text1).replace(/\s+/g, '') !== '[') return full;
+      return `${open1}${close1}${mid}${open2}${text2}`;
+    }
+  );
+  return result;
+};
+
 const sanitizeTemplateXmlArtifacts = (xml) => {
   if (!xml) return xml;
   let result = xml
     .replace(/strokecolor="black\s*\[3040\]"/gi, 'strokecolor="black"')
     .replace(/strokecolor="([^"]*?)\s*\[3040\]"/gi, 'strokecolor="$1"');
+  result = collapseDuplicateOpenBracketRuns(result);
   result = fixIsr4TranspositionSectionCTable(result);
   result = fixAnnexureFClaimantsC3Row(result);
   result = fixIEPFIndemnityBondLayout(result);
@@ -2151,6 +2170,7 @@ module.exports = {
   removeEmptyTableRows,
   removeTrailingEmptyTableColumns,
   sanitizeTemplateXmlArtifacts,
+  collapseDuplicateOpenBracketRuns,
   sanitizeTemplateZip,
   ensureFormBRtaNamePlaceholder,
   fixAffidavitCumIndemnityPlaceholders,
