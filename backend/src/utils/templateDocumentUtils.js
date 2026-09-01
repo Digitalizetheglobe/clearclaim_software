@@ -204,10 +204,15 @@ const cleanFormattedListText = (text) => {
   // Empty Late slots in lists: "Late, Late," or "Late ; Late"
   cleaned = cleaned.replace(/(?:\bLate\s*[,;&]\s*){2,}/gi, '');
 
-  // Remove repeated "or" with nothing between: "or or or", "or or ."
-  cleaned = cleaned.replace(/(?:^|\s)(?:or\s*){2,}/gi, ' ');
-  cleaned = cleaned.replace(/\s+or\s*\./gi, '.');
-  cleaned = cleaned.replace(/\bor\s+or\b/gi, 'or');
+  // Empty name-mismatch slots leave "Name1 or or or Name2". Keep one "or"
+  // when another name follows. Do not use (?:or\s*){2,} — that also eats the
+  // "or" in "original" / similar words.
+  do {
+    prev = cleaned;
+    cleaned = cleaned.replace(/\s*\bor\b(?:\s+\bor\b)+/gi, ' or ');
+  } while (cleaned !== prev);
+  cleaned = cleaned.replace(/\s+\bor\b\s*\./gi, '.');
+  cleaned = cleaned.replace(/\s+\bor\b\s*$/gi, '');
 
   // Remove redundant death-clause leftovers: "on , on on , on"
   cleaned = cleaned.replace(/(?:\s*on\s*,\s*)+/gi, ' ');
@@ -971,12 +976,30 @@ const normalizeOversizedBodyFonts = (xml) => {
   });
 };
 
+const visibleWtText = (xml) =>
+  [...String(xml || '').matchAll(/<w:t[^>]*>([^<]*)<\/w:t>/g)]
+    .map((m) => decodeXmlText(m[1]))
+    .join(' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+const compactWtText = (xml) => visibleWtText(xml).replace(/\s+/g, '');
+
 /**
- * True for Form-B indemnity docs that use page-relative floating signature/address boxes.
+ * True for Form-B / Affidavit Cum Indemnity docs that use floating
+ * address + signature + office boxes. Labels are often split across w:t
+ * runs ("F OR OFFICEUSE", "Signature of A ll holder"), so match visible
+ * text rather than raw XML.
  */
-const isFormBIndemnityXml = (xml) =>
-  /INDEMNITY/i.test(xml || '') &&
-  (/Form\s*-?\s*B/i.test(xml || '') || /Signature of All holder/i.test(xml || ''));
+const isFormBIndemnityXml = (xml) => {
+  if (!xml) return false;
+  const visible = visibleWtText(xml);
+  const compact = visible.replace(/\s+/g, '');
+  if (!/INDEMNITY/i.test(visible) && !/INDEMNITY/i.test(xml)) return false;
+  if (/Form[\s-]*B/i.test(visible)) return true;
+  if (/SignatureofAllholder/i.test(compact)) return true;
+  return /AddressofFirstHolder/i.test(compact) && /INWITNESSWHEREOF/i.test(compact);
+};
 
 /**
  * Annexure-F Claimants Details: the C3 row was copied from C2, so contact
@@ -1569,28 +1592,77 @@ const normalizeIEPFIndemnitySpacing = (xml) => {
 };
 
 /**
- * After empty securities rows are removed, Form-B page-1 shortens and absolute
- * signature/address anchors land on page 1 over the intro paragraph.
- * Force the witness / signature block onto a fresh page.
- *
- * Stay inside a single paragraph. A document-wide `[\s\S]*?` match from the
- * first `<w:p` to "IN WITNESS WHEREOF" inserted a page break at the top of
- * Affidavit / Form-B templates, which docx-preview shows as a blank ghost page.
+ * After empty securities rows are removed, Form-B page-1 used to shorten so
+ * page-relative signature/address floats painted over the intro. Those floats
+ * are now rebuilt as an inline table, so a forced page break before
+ * "IN WITNESS WHEREOF" only creates a blank stretched page. Keep this as a
+ * no-op so older callers/tests can still import it.
  */
-const ensureFormBWitnessPageBreak = (xml) => {
-  if (!isFormBIndemnityXml(xml) || !/IN WITNESS WHEREOF/i.test(xml)) {
-    return xml;
-  }
+const ensureFormBWitnessPageBreak = (xml) => xml;
 
-  return xml.replace(
-    /(<w:p\b[^>]*>)((?:<w:pPr\b[^>]*>[\s\S]*?<\/w:pPr>)?)((?:(?!<\/w:p>)[\s\S])*?)(<w:t\b[^>]*>)(IN WITNESS WHEREOF)/i,
-    (full, open, pPr, mid, tOpen, witness) => {
-      if (/<w:br\b[^>]*w:type="page"/i.test(full)) {
-        return full;
-      }
-      return `${open}${pPr || ''}<w:r><w:br w:type="page"/></w:r>${mid}${tOpen}${witness}`;
+/**
+ * Body paragraphs between IN WITNESS and "Signed before me" that only exist
+ * because Word parked empty list items / unused claimant slots under the old
+ * floating boxes. Left in the flow they become multi-page white gaps.
+ */
+const isUnusedWitnessSlotPara = (p) => {
+  if (/<w:(?:drawing|pict|object|tbl)|<mc:AlternateContent|<w:txbxContent/i.test(p)) {
+    return false;
+  }
+  const t = visibleWtText(p).replace(/\s+/g, ' ').trim();
+  if (!t) return true;
+  if (/^And$/i.test(t)) return true;
+  if (/^And\s+\d+\)$/i.test(t)) return true;
+  if (/^\d+\)$/i.test(t)) return true;
+  if (/^#?,?$/.test(t)) return true;
+  return false;
+};
+
+const stripLeadingWitnessHash = (p) => {
+  const t = visibleWtText(p).replace(/\s+/g, ' ').trim();
+  if (!/^[#,]/.test(t)) return p;
+  let stripping = true;
+  return p.replace(/<w:t([^>]*)>([^<]*)<\/w:t>/g, (full, attrs, text) => {
+    if (!stripping) return full;
+    const next = text.replace(/^\s*#\s*/, '').replace(/^\s*,\s*/, '');
+    if (!String(next).trim()) {
+      return `<w:t${attrs}></w:t>`;
     }
-  );
+    stripping = false;
+    return `<w:t${attrs}>${next}</w:t>`;
+  });
+};
+
+const tightenFormBWitnessRegion = (xml) => {
+  const start = xml.search(/IN WITNESS WHEREOF/i);
+  if (start < 0) return xml;
+  const signed = xml.search(/Signed before me/i);
+  const end = signed >= 0 ? signed : xml.length;
+  const region = xml.slice(start, end).replace(/<w:p\b[^>]*>[\s\S]*?<\/w:p>/g, (p) => {
+    if (isUnusedWitnessSlotPara(p)) return '';
+    return stripLeadingWitnessHash(p);
+  });
+  return xml.slice(0, start) + region + xml.slice(end);
+};
+
+const insertAfterMatchingParagraph = (xml, tableXml, testFn) => {
+  const start = xml.search(/IN WITNESS WHEREOF/i);
+  if (start < 0) return xml;
+  const signed = xml.search(/Signed before me/i);
+  const end = signed >= 0 ? signed : xml.length;
+  const slice = xml.slice(start, end);
+  const re = /<w:p\b[^>]*>[\s\S]*?<\/w:p>/g;
+  let match;
+  let insertAt = -1;
+  while ((match = re.exec(slice))) {
+    if (testFn(visibleWtText(match[0]))) {
+      insertAt = start + match.index + match[0].length;
+    }
+  }
+  if (insertAt < 0) {
+    insertAt = end;
+  }
+  return xml.slice(0, insertAt) + tableXml + xml.slice(insertAt);
 };
 
 /**
@@ -1642,77 +1714,168 @@ const removeEmptyLayoutDrawings = (xml) => {
 /**
  * Form-B signature/address/office boxes are wp:anchor floats with relativeFrom=page.
  * Even after a page break, Word still paints them over the intro paragraph when the
- * body is short. Convert those layout boxes to inline so they flow with the witness
- * section, and drop zero-size decorative absolute lines.
+ * body is short. Pull the text out of those floats into a real table:
+ *   [ Address of First Holder          (full width) ]
+ *   [ Signature of All holders | FOR OFFICE USE ONLY ]
+ * so the last two boxes sit side-by-side with a shared bottom edge (the default
+ * template layout). Inline drawings were stacking on the left because 3.3"+3.4"
+ * plus wrap distances exceeded the line width.
  *
  * Important: never leave empty <w:drawing></w:drawing> (Word "unreadable content").
  */
+const formBLayoutBoxKind = (text) => {
+  const compact = String(text || '').replace(/\s+/g, '');
+  if (/AddressofFirstHolder/i.test(compact)) return 'address';
+  if (/FOROFFICE/i.test(compact)) return 'office';
+  if (/SignatureofAllholder/i.test(compact)) return 'signature';
+  return null;
+};
+
+const formBBoxCellBorders = () =>
+  `<w:tcBorders>
+    <w:top w:val="single" w:sz="12" w:space="0" w:color="000000"/>
+    <w:left w:val="single" w:sz="12" w:space="0" w:color="000000"/>
+    <w:bottom w:val="single" w:sz="12" w:space="0" w:color="000000"/>
+    <w:right w:val="single" w:sz="12" w:space="0" w:color="000000"/>
+  </w:tcBorders>`;
+
+const formBBoxCell = (innerXml, opts = {}) => {
+  const { gridSpan = 1, width = 5000 } = opts;
+  let content = String(innerXml || '').trim();
+  if (!content) {
+    content = '<w:p><w:pPr><w:spacing w:after="0"/></w:pPr></w:p>';
+  } else if (!/<w:p\b/.test(content)) {
+    content = `<w:p><w:r><w:t>${escapeXmlText(content)}</w:t></w:r></w:p>`;
+  }
+  content = content.replace(/F\s*OR\s*OFFICEUSE/gi, 'FOR OFFICE USE');
+  content = content.replace(/FOR OFFICEUSE/gi, 'FOR OFFICE USE');
+  const span = gridSpan > 1 ? `<w:gridSpan w:val="${gridSpan}"/>` : '';
+  const vAlign = `<w:vAlign w:val="top"/>`;
+  return `<w:tc>
+    <w:tcPr>
+      <w:tcW w:w="${width}" w:type="dxa"/>
+      ${span}
+      ${formBBoxCellBorders()}
+      ${vAlign}
+      <w:tcMar>
+        <w:top w:w="80" w:type="dxa"/>
+        <w:left w:w="100" w:type="dxa"/>
+        <w:bottom w:w="80" w:type="dxa"/>
+        <w:right w:w="100" w:type="dxa"/>
+      </w:tcMar>
+    </w:tcPr>
+    ${content}
+  </w:tc>`;
+};
+
+const extractFormBTxbxContent = (block) => {
+  const match = String(block || '').match(/<w:txbxContent\b[^>]*>([\s\S]*?)<\/w:txbxContent>/i);
+  if (!match) return '';
+  let inner = match[1];
+  inner = inner.replace(/<w:sectPr\b[^>]*>[\s\S]*?<\/w:sectPr>/gi, '');
+  inner = inner.replace(/<w:lastRenderedPageBreak\b[^>]*\/?>/gi, '');
+  // Textboxes used empty paragraphs to fill a tall float. In a table cell those
+  // spacers stack and push "Signed before me" onto an extra page.
+  inner = inner.replace(/<w:p\b[^>]*>[\s\S]*?<\/w:p>/g, (p) => {
+    if (/<w:(?:drawing|pict|object)|<mc:AlternateContent/i.test(p)) return p;
+    return visibleWtText(p).replace(/\s+/g, '') ? p : '';
+  });
+  return inner;
+};
+
+const buildFormBSignatureTable = (boxes) => {
+  const address = boxes.address ? extractFormBTxbxContent(boxes.address) : '';
+  const signature = boxes.signature ? extractFormBTxbxContent(boxes.signature) : '';
+  const office = boxes.office ? extractFormBTxbxContent(boxes.office) : '';
+  const rows = [];
+  if (address) {
+    rows.push(`<w:tr>
+    <w:trPr><w:cantSplit/><w:trHeight w:val="3000" w:hRule="atLeast"/></w:trPr>
+    ${formBBoxCell(address, { gridSpan: 2, width: 10000 })}
+  </w:tr>`);
+  }
+  if (signature && office) {
+    rows.push(`<w:tr>
+    <w:trPr><w:cantSplit/><w:trHeight w:val="2400" w:hRule="exact"/></w:trPr>
+    ${formBBoxCell(signature, { width: 5000 })}
+    ${formBBoxCell(office, { width: 5000 })}
+  </w:tr>`);
+  } else if (signature) {
+    rows.push(`<w:tr>
+    <w:trPr><w:cantSplit/><w:trHeight w:val="2400" w:hRule="exact"/></w:trPr>
+    ${formBBoxCell(signature, { gridSpan: 2, width: 10000 })}
+  </w:tr>`);
+  } else if (office) {
+    rows.push(`<w:tr>
+    <w:trPr><w:cantSplit/><w:trHeight w:val="2400" w:hRule="exact"/></w:trPr>
+    ${formBBoxCell(office, { gridSpan: 2, width: 10000 })}
+  </w:tr>`);
+  }
+  if (!rows.length) return '';
+  return `<w:tbl>
+    <w:tblPr>
+      <w:tblW w:w="10000" w:type="dxa"/>
+      <w:jc w:val="left"/>
+      <w:tblLayout w:type="fixed"/>
+      <w:tblLook w:val="04A0"/>
+    </w:tblPr>
+    <w:tblGrid>
+      <w:gridCol w:w="5000"/>
+      <w:gridCol w:w="5000"/>
+    </w:tblGrid>
+    ${rows.join('')}
+  </w:tbl>`;
+};
+
 const defloatFormBLayoutAnchors = (xml) => {
   if (!isFormBIndemnityXml(xml)) return xml;
 
-  const anchorText = (inner) =>
-    [...inner.matchAll(/<w:t[^>]*>([^<]*)<\/w:t>/g)].map((m) => m[1]).join('');
+  // Already converted on a previous pass
+  const existingTbl = [...xml.matchAll(/<w:tbl\b[^>]*>[\s\S]*?<\/w:tbl>/g)].find((m) => {
+    const compact = compactWtText(m[0]);
+    return (
+      /AddressofFirstHolder/i.test(compact) &&
+      (/SignatureofAllholder/i.test(compact) || /FOROFFICE/i.test(compact))
+    );
+  });
+  if (existingTbl) return xml;
 
-  const isLayoutBoxText = (text) =>
-    /Signature of All holder|Address of First Holder|FOR OFFICE/i.test(text || '');
-
-  const isDecorativeAnchorInner = (inner) => {
-    const text = anchorText(inner);
-    return !text.trim() && /<wp:extent\b[^>]*(?:cx="0"|cy="0")/i.test(inner);
+  const boxes = { address: null, office: null, signature: null };
+  const takeBlock = (block) => {
+    const kind = formBLayoutBoxKind(visibleWtText(block));
+    if (!kind || boxes[kind]) return block;
+    boxes[kind] = block;
+    return '';
   };
 
-  const anchorToInline = (inner) => {
-    const extent =
-      (inner.match(/<wp:extent\b[^>]*\/>/) || ['<wp:extent cx="3127375" cy="1066800"/>'])[0];
-    const docPr =
-      (inner.match(/<wp:docPr\b[^>]*\/>/) || ['<wp:docPr id="1" name="TextBox"/>'])[0];
-    const cNv =
-      (inner.match(/<wp:cNvGraphicFramePr>[\s\S]*?<\/wp:cNvGraphicFramePr>/) || [''])[0];
-    const graphic = (inner.match(/<a:graphic\b[\s\S]*?<\/a:graphic>/) || [''])[0];
-    if (!graphic) return null;
-    return `<wp:inline distT="0" distB="0" distL="114300" distR="114300">${extent}${docPr}${cNv}${graphic}</wp:inline>`;
-  };
-
-  // Prefer operating on AlternateContent so Choice+Fallback stay consistent
-  let result = xml.replace(/<mc:AlternateContent>([\s\S]*?)<\/mc:AlternateContent>/g, (block) => {
-    const anchorMatch = block.match(/<wp:anchor\b[^>]*>([\s\S]*?)<\/wp:anchor>/);
-    if (!anchorMatch) return block;
-
-    const inner = anchorMatch[1];
-    if (isDecorativeAnchorInner(inner)) {
-      return '';
-    }
-
-    const text = anchorText(inner);
-    if (!isLayoutBoxText(text)) return block;
-
-    const inline = anchorToInline(inner);
-    if (!inline) return block;
-
-    // Plain drawing — avoid Choice-without-Fallback (Word may flag unreadable content)
-    return `<w:drawing>${inline}</w:drawing>`;
+  let result = xml.replace(/<mc:AlternateContent>[\s\S]*?<\/mc:AlternateContent>/g, takeBlock);
+  result = result.replace(/<w:drawing\b[^>]*>[\s\S]*?<\/w:drawing>/g, (block) => {
+    if (boxes.address && boxes.office && boxes.signature) return block;
+    return takeBlock(block);
   });
 
-  // Any remaining bare anchors (not wrapped in AlternateContent)
+  if (!boxes.address && !boxes.office && !boxes.signature) return result;
+
+  result = tightenFormBWitnessRegion(result);
+
+  const tableXml = buildFormBSignatureTable(boxes);
+  if (!tableXml) return result;
+
+  result = insertAfterMatchingParagraph(
+    result,
+    tableXml,
+    (text) => /this\s+day\s+of/i.test(text) || /hands and seals/i.test(text)
+  );
+
+  // Drop leftover zero-size decorative absolute lines
   result = result.replace(/<wp:anchor\b[^>]*>([\s\S]*?)<\/wp:anchor>/g, (full, inner) => {
-    if (isDecorativeAnchorInner(inner)) return '';
-    if (!isLayoutBoxText(anchorText(inner))) return full;
-    return anchorToInline(inner) || full;
+    const text = [...inner.matchAll(/<w:t[^>]*>([^<]*)<\/w:t>/g)].map((m) => m[1]).join('');
+    if (!text.trim() && /<wp:extent\b[^>]*(?:cx="0"|cy="0")/i.test(inner)) return '';
+    return full;
   });
 
-  // Remove empty drawings / empty AlternateContent left after decorative deletion
-  result = result.replace(/<w:drawing>\s*<\/w:drawing>/g, '');
-  result = result.replace(
-    /<mc:AlternateContent>\s*<mc:Choice\b[^>]*>\s*<\/mc:Choice>\s*(?:<mc:Fallback\b[^>]*>[\s\S]*?<\/mc:Fallback>)?\s*<\/mc:AlternateContent>/g,
-    ''
-  );
-  result = result.replace(
-    /<mc:AlternateContent>\s*<mc:Choice\b[^>]*>\s*<w:drawing>\s*<\/w:drawing>\s*<\/mc:Choice>[\s\S]*?<\/mc:AlternateContent>/g,
-    ''
-  );
-  // Empty runs that only held a removed drawing
   result = result.replace(/<w:r\b[^>]*>\s*<\/w:r>/g, '');
-
+  result = result.replace(/<w:drawing>\s*<\/w:drawing>/g, '');
   return result;
 };
 
@@ -1815,6 +1978,70 @@ const rewriteParagraphPlainText = (paraXml, newText) => {
   });
 };
 
+const uniqueJoinedNames = (chunk, splitter, joiner) => {
+  const seen = new Set();
+  const unique = [];
+  String(chunk || '')
+    .split(splitter)
+    .map((part) => part.replace(/\s+/g, ' ').trim())
+    .forEach((part) => {
+      if (!part || /^[&,;]+$/.test(part) || /^or$/i.test(part)) return;
+      const key = part.toLowerCase();
+      if (seen.has(key)) return;
+      seen.add(key);
+      unique.push(part);
+    });
+  return unique.length ? unique.join(joiner) : String(chunk || '').replace(/\s+/g, ' ').trim();
+};
+
+const dedupeNameMismatchParagraphText = (text) => {
+  let t = String(text || '');
+  t = t.replace(
+    /(aforesaid documents as\s+)(.+?)(\s+belongs to one and same person)/i,
+    (_, lead, names, tail) => `${lead}${uniqueJoinedNames(names, /\s*&\s*/, ' & ')}${tail}`
+  );
+  t = t.replace(
+    /((?:Aadhaar|Aadhar) and PAN as\s+)(.+?)(\s+s\/o\s*\/\s*w\/o)/i,
+    (_, lead, names, tail) => `${lead}${uniqueJoinedNames(names, /\s*&\s*/, ' & ')}${tail}`
+  );
+  t = t.replace(
+    /(name appears as\s+)(.+?)(\s*\.)/i,
+    (_, lead, names, tail) => `${lead}${uniqueJoinedNames(names, /\s+or\s+/i, ' or ')}${tail}`
+  );
+  return t.replace(/\s+/g, ' ').trim();
+};
+
+/**
+ * Name Mismatch SELF affidavits list Aadhaar/PAN/CML/Bank/Passport/Cert in
+ * one clause. When several fields hold the same spelling, print that name
+ * once; append any different spelling after "&" (point 3 / KYC) or "or"
+ * (customary documents).
+ */
+const dedupeNameMismatchAffidavitNames = (xml) => {
+  if (
+    !xml ||
+    !/belongs to one and same person/i.test(xml) ||
+    !/aforesaid documents/i.test(xml)
+  ) {
+    return xml;
+  }
+
+  return xml.replace(/<w:p\b[^>]*>[\s\S]*?<\/w:p>/g, (para) => {
+    const text = visibleWtText(para);
+    if (!text) return para;
+    if (
+      !/aforesaid documents as/i.test(text) &&
+      !/(?:Aadhaar|Aadhar) and PAN as/i.test(text) &&
+      !/name appears as/i.test(text)
+    ) {
+      return para;
+    }
+    const cleaned = dedupeNameMismatchParagraphText(text);
+    if (cleaned === text.replace(/\s+/g, ' ').trim()) return para;
+    return rewriteParagraphPlainText(para, cleaned);
+  });
+};
+
 const cleanupIEPFIndemnityPopulatedXml = (xml) => {
   if (!xml || !/Investor Education and Protection Fund Authority/i.test(xml)) return xml;
 
@@ -1833,6 +2060,7 @@ const postProcessDocumentXml = (xml) => {
   result = result.replace(/undefined|null/gi, '');
   result = normalizeOversizedBodyFonts(result);
   result = cleanParagraphsInXml(result); // Re-enabled with segmented logic to preserve formatting
+  result = dedupeNameMismatchAffidavitNames(result);
   result = cleanupIEPFIndemnityPopulatedXml(result);
   result = flattenIEPFIndemnityFlow(result);
   result = normalizeIEPFIndemnitySpacing(result);
@@ -1841,9 +2069,9 @@ const postProcessDocumentXml = (xml) => {
   result = renumberLegalHeirTableRows(result);
   result = removeTrailingEmptyTableColumns(result);
   result = removeEmptyNonClaimantRows(result);
-  // Form-B: remove empty securities rows, then keep signature/address boxes from
-  // overlaying page-1 body text (page break + convert floats to inline).
-  result = ensureFormBWitnessPageBreak(result);
+  // Address + signature/office boxes become an inline table after the witness
+  // clause. Do not page-break that clause — it stretched the generated file
+  // to extra mostly-blank pages.
   result = defloatFormBLayoutAnchors(result);
   result = fixIsr4TranspositionSectionCTable(result);
   return result;

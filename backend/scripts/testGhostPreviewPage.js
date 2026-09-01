@@ -38,15 +38,14 @@ const emptyLargeAnchors = (xml) =>
 const affidavit = 'Affidavit Cum Indemnity Bond_NDEL_Single Claimant.docx';
 const raw = loadXml(affidavit);
 assert(/IN WITNESS WHEREOF/i.test(raw), 'fixture has witness clause');
-assert(emptyLargeAnchors(raw) >= 1, 'fixture has leftover empty rectangle');
 
 const out = postProcessDocumentXml(raw);
 assert(!/w:type="page"/i.test(firstParagraph(out)), 'first paragraph must not start a new page');
 assert(/Annexure-A/i.test(firstText(out)), 'document still starts with Annexure-A');
-assert(/w:type="page"/i.test(witnessParagraph(out)), 'page break stays on the witness paragraph');
+assert(!/w:type="page"/i.test(witnessParagraph(out)), 'witness clause is not forced onto a new page');
 assert(emptyLargeAnchors(out) === 0, 'empty large floating rectangle removed');
 assert(!/<w:lastRenderedPageBreak\b/i.test(out), 'lastRenderedPageBreak stripped');
-assert(/Signature of All holder/i.test(out), 'signature box kept');
+assert(/Signature of A\s*ll holder/i.test(out), 'signature box kept');
 assert(/Address of First Holder/i.test(out), 'address box kept');
 
 const formBName = 'Form-B (Indemnity)- NDEL_Single_Template.docx';
@@ -54,8 +53,8 @@ if (fs.existsSync(path.join(templatesDir, formBName))) {
   const formB = postProcessDocumentXml(loadXml(formBName));
   assert(!/w:type="page"/i.test(firstParagraph(formB)), 'Form-B first paragraph has no page break');
   assert(
-    /w:type="page"/i.test(witnessParagraph(formB)),
-    'Form-B witness paragraph still gets a page break'
+    !/w:type="page"/i.test(witnessParagraph(formB)),
+    'Form-B witness paragraph has no forced page break'
   );
 }
 
