@@ -98,6 +98,8 @@ const getUserRoles = (user) => {
 };
 
 const isAdminUser = (user) => getUserRoles(user).includes('admin');
+const isSuperAdminUser = (user) => getUserRoles(user).includes('super_admin');
+const hasFullDashboardAccess = (user) => isAdminUser(user) || isSuperAdminUser(user);
 
 const getUserId = (user) => parseInt(user?.id, 10);
 
@@ -200,13 +202,13 @@ const getDashboardDetails = async (req, res) => {
       });
     }
 
-    const isAdmin = isAdminUser(req.user);
+    const hasFullAccess = hasFullDashboardAccess(req.user);
     const userId = getUserId(req.user);
 
     if (config.entity === 'company') {
       const whereClause = {};
 
-      if (!isAdmin && userId) {
+      if (!hasFullAccess && userId) {
         Object.assign(whereClause, await buildCompanyUserScope(userId));
       }
 
@@ -262,7 +264,7 @@ const getDashboardDetails = async (req, res) => {
     }
 
     const whereClause = {};
-    if (!isAdmin && userId) {
+    if (!hasFullAccess && userId) {
       Object.assign(whereClause, buildCaseUserScope(userId));
     }
 

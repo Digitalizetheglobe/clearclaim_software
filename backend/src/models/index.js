@@ -36,6 +36,18 @@ Case.belongsTo(User, {
   foreignKey: 'assigned_to', 
   as: 'assignedUser' 
 });
+Case.belongsTo(User, {
+  foreignKey: 'previous_assigned_to',
+  as: 'previousAssignedUser'
+});
+Case.belongsTo(User, {
+  foreignKey: 'reassigned_by',
+  as: 'reassignedByUser'
+});
+User.hasMany(Case, {
+  foreignKey: 'previous_assigned_to',
+  as: 'previouslyAssignedCases'
+});
 
 // Case - CaseValue associations
 Case.hasMany(CaseValue, { 

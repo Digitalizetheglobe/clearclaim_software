@@ -513,8 +513,13 @@ const updateCompanyStatus = async (req, res) => {
     }
 
     const roles = getUserRoles(req.user);
+    const isAdmin = roles.includes('admin');
+    const isSuperAdmin = roles.includes('super_admin');
     const isEmployeeOrSales = roles.includes('employee') || roles.includes('sales');
+    // Super Admin / Admin may change company status at any time; employees stay locked in Excel review
     if (
+      !isAdmin &&
+      !isSuperAdmin &&
       isExcelDataReviewStatus(company.status) &&
       isEmployeeOrSales &&
       !canEditCompanyInReview(req.user, company)
@@ -548,13 +553,18 @@ const updateCompanyStatus = async (req, res) => {
     await company.update(updateData);
 
     if (updateData.status) {
+      const changeNote = isSuperAdmin
+        ? 'Status updated by Super Admin'
+        : isAdmin
+          ? 'Status updated by Admin'
+          : 'Status updated from Case Companies';
       await recordCompanyStatusChange({
         companyId: company.id,
         fromStatus: previousStatus,
         toStatus: updateData.status,
         changedBy: req.user?.id,
-        changeSource: 'manual',
-        note: 'Status updated from Case Companies'
+        changeSource: isSuperAdmin ? 'super_admin' : 'manual',
+        note: changeNote
       });
     }
 
@@ -1631,6 +1641,227 @@ const submitForTemplateReview = async (req, res) => {
   }
 };
 
+/**
+ * Super Admin / Admin: reassign Excel (data) reviewer and/or template reviewer on a company.
+ * Body: { excel_reviewer_id?: number|null, template_reviewer_id?: number|null }
+ */
+const reassignCompanyReviewers = async (req, res) => {
+  try {
+    const roles = Array.isArray(req.user?.role) ? req.user.role : [req.user?.role].filter(Boolean);
+    const isAdmin = roles.includes('admin');
+    const isSuperAdmin = roles.includes('super_admin');
+    if (!isAdmin && !isSuperAdmin) {
+      return res.status(403).json({ error: 'Only Super Admin or Admin can reassign reviewers.' });
+    }
+
+    const { companyId } = req.params;
+    const { excel_reviewer_id, template_reviewer_id } = req.body;
+
+    if (excel_reviewer_id === undefined && template_reviewer_id === undefined) {
+      return res.status(400).json({
+        error: 'Provide excel_reviewer_id and/or template_reviewer_id to reassign.'
+      });
+    }
+
+    const company = await Company.findByPk(companyId, {
+      include: [
+        { model: Case, as: 'case', attributes: ['id', 'case_id', 'case_title'] },
+        { model: User, as: 'assignedUser', attributes: ['id', 'name', 'email'] },
+        getTemplateReviewerInclude(User)
+      ].filter(Boolean)
+    });
+
+    if (!company) {
+      return res.status(404).json({ error: 'Company not found' });
+    }
+
+    const updateData = {};
+    const notifications = [];
+    const actorLabel = isSuperAdmin ? 'Super Admin' : 'Admin';
+    const actor = await User.findByPk(req.user.id, { attributes: ['id', 'name', 'email'] });
+    const actorName = actor?.name || actorLabel;
+
+    const userHasRole = (user, roleName) => {
+      const r = Array.isArray(user.role) ? user.role : [user.role].filter(Boolean);
+      return r.includes(roleName) || r.includes('admin');
+    };
+
+    if (excel_reviewer_id !== undefined) {
+      const newId =
+        excel_reviewer_id === null || excel_reviewer_id === ''
+          ? null
+          : parseInt(excel_reviewer_id, 10);
+
+      if (newId != null && Number.isNaN(newId)) {
+        return res.status(400).json({ error: 'Invalid excel_reviewer_id' });
+      }
+
+      if (newId != null) {
+        const reviewer = await User.findByPk(newId);
+        if (!reviewer) {
+          return res.status(404).json({ error: 'Excel / data reviewer not found' });
+        }
+        if (!userHasRole(reviewer, 'data_reviewer')) {
+          return res.status(400).json({
+            error: 'Selected user must have the data_reviewer (Excel reviewer) role.'
+          });
+        }
+      }
+
+      const previousId = company.assigned_to != null ? Number(company.assigned_to) : null;
+      if (newId !== previousId) {
+        updateData.assigned_to = newId;
+
+        if (previousId && previousId !== newId) {
+          notifications.push({
+            user_id: previousId,
+            title: 'Excel review reassigned',
+            message: `Company "${company.company_name}" Excel/data review was reassigned to another reviewer by ${actorLabel} (${actorName}). It is no longer in your queue.`,
+            meta: {
+              kind: 'excel_reviewer',
+              previous_reviewer_id: previousId,
+              new_reviewer_id: newId
+            }
+          });
+        }
+        if (newId) {
+          notifications.push({
+            user_id: newId,
+            title: 'Excel review assigned to you',
+            message: `Company "${company.company_name}" was assigned to you for Excel/data review by ${actorLabel} (${actorName}).`,
+            meta: {
+              kind: 'excel_reviewer',
+              previous_reviewer_id: previousId,
+              new_reviewer_id: newId
+            }
+          });
+        }
+      }
+    }
+
+    if (template_reviewer_id !== undefined) {
+      if (!isTemplateReviewerColumnAvailable()) {
+        return res.status(409).json({
+          error:
+            'template_reviewer_id column is not available on this database. Run the template reviewer migration first.'
+        });
+      }
+
+      const newId =
+        template_reviewer_id === null || template_reviewer_id === ''
+          ? null
+          : parseInt(template_reviewer_id, 10);
+
+      if (newId != null && Number.isNaN(newId)) {
+        return res.status(400).json({ error: 'Invalid template_reviewer_id' });
+      }
+
+      if (newId != null) {
+        const reviewer = await User.findByPk(newId);
+        if (!reviewer) {
+          return res.status(404).json({ error: 'Template reviewer not found' });
+        }
+        if (!userHasRole(reviewer, 'template_reviewer')) {
+          return res.status(400).json({
+            error: 'Selected user must have the template_reviewer role.'
+          });
+        }
+      }
+
+      const previousId =
+        company.template_reviewer_id != null ? Number(company.template_reviewer_id) : null;
+      if (newId !== previousId) {
+        updateData.template_reviewer_id = newId;
+
+        if (previousId && previousId !== newId) {
+          notifications.push({
+            user_id: previousId,
+            title: 'Template review reassigned',
+            message: `Company "${company.company_name}" template review was reassigned to another reviewer by ${actorLabel} (${actorName}). It is no longer in your queue.`,
+            meta: {
+              kind: 'template_reviewer',
+              previous_reviewer_id: previousId,
+              new_reviewer_id: newId
+            }
+          });
+        }
+        if (newId) {
+          notifications.push({
+            user_id: newId,
+            title: 'Template review assigned to you',
+            message: `Company "${company.company_name}" was assigned to you for template review by ${actorLabel} (${actorName}).`,
+            meta: {
+              kind: 'template_reviewer',
+              previous_reviewer_id: previousId,
+              new_reviewer_id: newId
+            }
+          });
+        }
+      }
+    }
+
+    const nextExcel =
+      updateData.assigned_to !== undefined ? updateData.assigned_to : company.assigned_to;
+    const nextTemplate =
+      updateData.template_reviewer_id !== undefined
+        ? updateData.template_reviewer_id
+        : company.template_reviewer_id;
+    if (
+      nextExcel != null &&
+      nextTemplate != null &&
+      Number(nextExcel) === Number(nextTemplate)
+    ) {
+      return res.status(400).json({
+        error: 'Excel reviewer and template reviewer must be different users.'
+      });
+    }
+
+    if (Object.keys(updateData).length === 0) {
+      return res.status(400).json({ error: 'No reviewer changes to apply.' });
+    }
+
+    await company.update(updateData);
+
+    for (const n of notifications) {
+      try {
+        await Notification.create({
+          user_id: n.user_id,
+          company_id: company.id,
+          case_id: company.case_id,
+          type: 'case_reassigned',
+          title: n.title,
+          message: n.message,
+          metadata: {
+            ...n.meta,
+            company_name: company.company_name,
+            reassigned_by: req.user.id,
+            reassigned_by_name: actorName,
+            reassigned_by_role: isSuperAdmin ? 'super_admin' : 'admin'
+          }
+        });
+      } catch (notifyErr) {
+        console.warn('Reviewer reassignment notification skipped:', notifyErr.message);
+      }
+    }
+
+    const updatedCompany = await Company.findByPk(companyId, {
+      include: [
+        { model: User, as: 'assignedUser', attributes: ['id', 'name', 'email'] },
+        { model: User, as: 'createdByUser', attributes: ['id', 'name', 'email'] },
+        getTemplateReviewerInclude(User)
+      ].filter(Boolean)
+    });
+
+    res.json({
+      message: 'Reviewers updated successfully',
+      company: enrichCompanyTemplateReviewer(updatedCompany)
+    });
+  } catch (error) {
+    console.error('Error reassigning company reviewers:', error);
+    res.status(500).json({ error: 'Failed to reassign reviewers' });
+  }
+};
+
 const getCompanyNotes = async (req, res) => {
   try {
     const { companyId } = req.params;
@@ -1840,6 +2071,7 @@ module.exports = {
   getReviewerStats,
   submitForTemplateReview,
   assignForDataReview,
+  reassignCompanyReviewers,
   getCompanyNotes,
   addCompanyNote,
   getCompanyStatusHistory

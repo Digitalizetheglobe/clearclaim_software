@@ -3,6 +3,23 @@ const fs = require('fs').promises;
 const path = require('path');
 const Docxtemplater = require('docxtemplater');
 const PizZip = require('pizzip');
+const { postProcessDocxZip, sanitizeTemplateZip, isSelectableTemplateFile, toDisplayTemplateName, toPopulatedDownloadName } = require('../utils/templateDocumentUtils');
+const { applyCanonicalBankFields } = require('../utils/bankFieldMapping');
+const { applyCanonicalRtaName } = require('../utils/rtaFieldMapping');
+const { applyShareCertificateMappings, applyNameAsPerCertFallbacks } = require('../utils/shareCertificateMapping');
+
+const resolveExistingTemplateFile = async (templateName) => {
+  const templatesDir = path.join(__dirname, '../../templates');
+  const requested = path.basename(String(templateName || ''));
+  try {
+    await fs.access(path.join(templatesDir, requested));
+    return requested;
+  } catch {
+    const files = await fs.readdir(templatesDir);
+    const found = files.find((f) => f.toLowerCase() === requested.toLowerCase());
+    return found || requested;
+  }
+};
 
 // Get all available templates
 const getAllTemplates = async (req, res) => {
@@ -14,19 +31,10 @@ const getAllTemplates = async (req, res) => {
     // - Skip Word temp files (~$...)
     // - Skip backups
     // - Skip known "invalid" double-hyphen variants
-    const docxFiles = templateFiles.filter(file =>
-      file.endsWith('.docx') &&
-      !file.startsWith('~$') &&
-      !file.toLowerCase().includes('backup') &&
-      !file.includes('--')
-    );
+    const docxFiles = templateFiles.filter(isSelectableTemplateFile);
 
     const templates = docxFiles.map(file => {
-      const cleanName = file
-        .replace('_Template.docx', '')
-        .replace('.docx', '')
-        .replace(/_/g, ' ')
-        .trim();
+      const cleanName = toDisplayTemplateName(file);
 
       let category = 'general';
       
@@ -48,6 +56,8 @@ const getAllTemplates = async (req, res) => {
         category = 'name_mismatch';
       } else if (lower.includes('sh-13')) {
         category = 'sh13';
+      } else if (lower.includes('iepf')) {
+        category = 'iepf';
       }
 
       return {
@@ -85,7 +95,8 @@ const getAllTemplates = async (req, res) => {
 // Extract template content structure for preview
 const extractTemplateStructure = async (templatePath) => {
   try {
-    const templateFullPath = path.join(__dirname, '../../templates', templatePath);
+    const resolved = await resolveExistingTemplateFile(templatePath);
+    const templateFullPath = path.join(__dirname, '../../templates', resolved);
     const templateBuffer = await fs.readFile(templateFullPath);
     
     // Create a new zip file from the template
@@ -170,8 +181,11 @@ const mapCaseValuesToTemplate = async (caseId, templatePath) => {
     // Create a mapping object for easy lookup
     const valueMap = {};
     
-    // First, map all direct field keys and labels
+    // First, map all direct field keys and labels (including keys with no CaseField join)
     caseValues.forEach(cv => {
+      if (cv.field_key && cv.field_value != null && String(cv.field_value).trim() !== '') {
+        if (!valueMap[cv.field_key]) valueMap[cv.field_key] = cv.field_value;
+      }
       if (cv.caseField) {
         const fieldValue = cv.field_value || ''; // Ensure never undefined
         // Map by field key (exact match)
@@ -294,13 +308,30 @@ const mapCaseValuesToTemplate = async (caseId, templatePath) => {
           valueMap['Old Address C3'] = value;
         }
         
-        // Banking information mapping
-        if (key.includes('Bank Name C1')) {
-          valueMap['Bank Branch C1'] = value;
-          valueMap['Bank Address C1'] = value;
+        // Banking information mapping — do NOT overwrite distinct bank fields with each other
+        if (/^bank name c\d+$/i.test(key.trim())) {
+          const suffix = key.match(/c(\d+)$/i)[1];
+          if (!valueMap[`Bank Name C${suffix}`]) valueMap[`Bank Name C${suffix}`] = value;
         }
-        if (key.includes('Bank AC C1')) {
-          valueMap['Bank AC Type C1'] = value;
+        if (/^bank branch c\d+$/i.test(key.trim())) {
+          const suffix = key.match(/c(\d+)$/i)[1];
+          if (!valueMap[`Bank Branch C${suffix}`]) valueMap[`Bank Branch C${suffix}`] = value;
+        }
+        if (/^bank address c\d+$/i.test(key.trim()) || /^postal address c\d+$/i.test(key.trim())) {
+          const suffix = key.match(/c(\d+)$/i)[1];
+          if (!valueMap[`Bank Address C${suffix}`]) valueMap[`Bank Address C${suffix}`] = value;
+        }
+        if (
+          (/^bank ac c\d+$/i.test(key.trim()) ||
+            /^bank account( number| no)? c\d+$/i.test(key.trim())) &&
+          !key.includes('type')
+        ) {
+          const suffix = key.match(/c(\d+)$/i)[1];
+          if (!valueMap[`Bank AC C${suffix}`]) valueMap[`Bank AC C${suffix}`] = value;
+        }
+        if (/^bank ac type c\d+$/i.test(key.trim()) || /^bank account type c\d+$/i.test(key.trim())) {
+          const suffix = key.match(/c(\d+)$/i)[1];
+          if (!valueMap[`Bank AC Type C${suffix}`]) valueMap[`Bank AC Type C${suffix}`] = value;
         }
         
         // Company and shares mapping
@@ -418,6 +449,11 @@ const mapCaseValuesToTemplate = async (caseId, templatePath) => {
         }
       }
     });
+
+    applyCanonicalBankFields(valueMap);
+    applyCanonicalRtaName(valueMap);
+    applyShareCertificateMappings(valueMap);
+    applyNameAsPerCertFallbacks(valueMap);
     
     // Debug: Log final mapping count and check for conflicts
     console.log(`Created ${Object.keys(valueMap).length} total mappings`);
@@ -526,13 +562,16 @@ const mapCaseValuesToTemplate = async (caseId, templatePath) => {
     // 4. Final validation - ensure data types match field types
     Object.entries(valueMap).forEach(([key, value]) => {
       if (value && typeof value === 'string') {
-        // PAN fields should be alphanumeric, 10+ chars, no spaces
-        if (key.includes('PAN') && (value.includes(' ') || value.length < 10)) {
+        // PAN *number* fields only — NOT "Name as per PAN C1"
+        const isPanNumberField =
+          /^(PAN(\s*C\d+)?|pan_c\d+)$/i.test(String(key).trim()) &&
+          !/name\s+as\s+per\s+pan/i.test(key);
+        if (isPanNumberField && (value.includes(' ') || value.length < 10)) {
           console.log(`⚠️ Invalid PAN format for ${key}: ${value}`);
           valueMap[key] = '';
         }
         // Name fields should have spaces (multiple words)
-        if (key.includes('Name') && !key.includes('PAN') && !value.includes(' ') && value.length > 5) {
+        if (key.includes('Name') && !isPanNumberField && !value.includes(' ') && value.length > 5) {
           console.log(`⚠️ Suspicious name format for ${key}: ${value}`);
         }
       }
@@ -580,7 +619,8 @@ const mapCaseValuesToTemplate = async (caseId, templatePath) => {
     console.log(`✅ Final valueMap has ${Object.keys(valueMap).length} entries, all undefined values cleaned`);
 
     // Read the template file
-    const templateFullPath = path.join(__dirname, '../../templates', templatePath);
+    const resolved = await resolveExistingTemplateFile(templatePath);
+    const templateFullPath = path.join(__dirname, '../../templates', resolved);
     const templateContent = await fs.readFile(templateFullPath);
 
     return {
@@ -646,11 +686,12 @@ const generateMappingPreview = (valueMap, templatePath, templateStructure) => {
     populatedFields: Object.keys(valueMap).filter(key => valueMap[key] && valueMap[key].trim() !== '').length,
     emptyFields: Object.keys(valueMap).filter(key => !valueMap[key] || valueMap[key].trim() === '').length,
     templateStructure: {
-      name: templatePath.replace('_Template.docx', '').replace(/_/g, ' '),
-      category: templatePath.includes('Annexure-D') ? 'Individual Affidavit' : 
+      name: toDisplayTemplateName(templatePath),
+      category: /isr-/i.test(templatePath) ? 'ISR' :
+                templatePath.includes('Annexure-D') ? 'Individual Affidavit' : 
                 templatePath.includes('Form-A') ? 'Affidavit' :
                 templatePath.includes('Form-B') ? 'Indemnity' :
-                templatePath.includes('ISR-') ? 'ISR' : 'General',
+                'General',
       description: getTemplateDescription(templatePath),
       placeholders: templateStructure.placeholders || [],
       originalContent: templateStructure.textContent || '',
@@ -729,10 +770,11 @@ const downloadPopulatedTemplate = async (req, res) => {
     }
 
     // Map case values to template
-    const mappedTemplate = await mapCaseValuesToTemplate(caseId, templateName);
+    const resolvedName = await resolveExistingTemplateFile(templateName);
+    const mappedTemplate = await mapCaseValuesToTemplate(caseId, resolvedName);
 
     // Read the template file
-    const templatePath = path.join(__dirname, '../../templates', templateName);
+    const templatePath = path.join(__dirname, '../../templates', resolvedName);
 
     // Check if template file exists
     try {
@@ -758,6 +800,7 @@ const downloadPopulatedTemplate = async (req, res) => {
 
     // Create a new zip file from the template
     const zip = new PizZip(templateBuffer);
+    sanitizeTemplateZip(zip, { templateName: templateName });
 
     // Create docxtemplater instance
     const doc = new Docxtemplater(zip, {
@@ -818,39 +861,18 @@ const downloadPopulatedTemplate = async (req, res) => {
       // Generate the populated document buffer
       let buffer = doc.getZip().generate({ type: 'nodebuffer' });
 
-      // LAST RESORT: Check if the generated document still contains "undefined" text
-      // This is a post-processing step to catch any remaining undefined values
+      // LAST RESORT: Post-process document for formatting cleanup and blank rows
       try {
-        const zip = new PizZip(buffer);
-        const documentXml = zip.files["word/document.xml"];
-        
-        if (documentXml) {
-          let content = documentXml.asText();
-          const originalContent = content;
-          
-          // Replace any remaining "undefined" text with empty string
-          content = content.replace(/undefined/g, '');
-          
-          if (content !== originalContent) {
-            console.log('🚨 POST-PROCESSING: Found and removed "undefined" text from generated document');
-            
-            // Update the document.xml content
-            zip.file("word/document.xml", content);
-            
-            // Regenerate the buffer with cleaned content
-            buffer = zip.generate({ type: 'nodebuffer' });
-            console.log('✅ Document post-processed and cleaned');
-          } else {
-            console.log('✅ No "undefined" text found in generated document');
-          }
-        }
+        const postZip = new PizZip(buffer);
+        postProcessDocxZip(postZip);
+        buffer = postZip.generate({ type: 'nodebuffer' });
+        console.log('✅ Document post-processed: cleaned &&, commas, and empty table rows');
       } catch (postProcessError) {
         console.error('Warning: Post-processing failed, using original buffer:', postProcessError.message);
-        // Continue with original buffer if post-processing fails
       }
 
       // Set response headers for file download
-      const filename = templateName.replace('_Template.docx', '_Populated.docx');
+      const filename = toPopulatedDownloadName(templateName);
       res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
       res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
       res.setHeader('Content-Length', buffer.length);
@@ -862,7 +884,7 @@ const downloadPopulatedTemplate = async (req, res) => {
       
       // If there's an error, return the original template
       const fileStream = require('fs').createReadStream(templatePath);
-      const filename = templateName.replace('_Template.docx', '_Original.docx');
+      const filename = toPopulatedDownloadName(templateName).replace('_Populated.docx', '_Original.docx');
       
       res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
       res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
@@ -883,7 +905,7 @@ const getTemplateStats = async (req, res) => {
   try {
     const templatesDir = path.join(__dirname, '../../templates');
     const templateFiles = await fs.readdir(templatesDir);
-    const docxFiles = templateFiles.filter(file => file.endsWith('.docx'));
+    const docxFiles = templateFiles.filter(isSelectableTemplateFile);
 
     // Count by category
     const categoryStats = {};

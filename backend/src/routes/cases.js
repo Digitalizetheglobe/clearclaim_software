@@ -16,8 +16,8 @@ const router = express.Router();
 // Apply JWT authentication to all case routes
 router.use(auth);
 
-// Get all cases with filters and pagination (admin only)
-router.get('/', requireRole(['admin']), getAllCases);
+// Get all cases with filters and pagination (admin + super_admin)
+router.get('/', requireRole(['admin', 'super_admin']), getAllCases);
 
 // Get case statistics (admin only)
 router.get('/stats', requireRole(['admin']), getCaseStats);

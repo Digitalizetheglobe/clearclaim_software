@@ -103,6 +103,13 @@ async function startServer() {
     }
 
     await initializeCompanySchemaFeatures(sequelize, models);
+
+    try {
+      const { ensureCaseReassignmentSchema } = require('./src/utils/ensureCaseReassignmentSchema');
+      await ensureCaseReassignmentSchema(sequelize);
+    } catch (schemaErr) {
+      console.warn('Case reassignment schema ensure failed:', schemaErr.message);
+    }
     
     app.listen(PORT, () => {
       console.log(`Server running on port ${PORT}`);
