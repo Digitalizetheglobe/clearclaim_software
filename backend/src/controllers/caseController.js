@@ -1,6 +1,6 @@
 const { Case, User, Company, Notification } = require('../models');
 const { Op, sequelize } = require('sequelize');
-const { getTemplateReviewerInclude } = require('../utils/companySchemaFeatures');
+const { getTemplateReviewerInclude, getCompanyListAttributes } = require('../utils/companySchemaFeatures');
 const {
   isCaseReassignmentSchemaAvailable,
   getCaseReassignmentIncludes
@@ -72,7 +72,7 @@ const getAllCases = async (req, res) => {
         {
           model: Company,
           as: 'companies',
-          attributes: ['id', 'company_name', 'status', 'created_at', 'assigned_to', 'template_reviewer_id'],
+          attributes: getCompanyListAttributes(['id', 'company_name', 'status', 'created_at', 'assigned_to', 'template_reviewer_id']),
           include: [
             {
               model: User,
@@ -119,7 +119,7 @@ const getCaseById = async (req, res) => {
         {
           model: Company,
           as: 'companies',
-          attributes: ['id', 'company_name', 'status', 'created_at', 'assigned_to', 'template_reviewer_id'],
+          attributes: getCompanyListAttributes(['id', 'company_name', 'status', 'created_at', 'assigned_to', 'template_reviewer_id']),
           include: [
             {
               model: User,
