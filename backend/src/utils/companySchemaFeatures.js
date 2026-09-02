@@ -99,7 +99,9 @@ async function initializeCompanySchemaFeatures(sequelize, models) {
   );
 
   if (!templateReviewerColumnAvailable && Company) {
-    delete Company.rawAttributes.template_reviewer_id;
+    if (Company.rawAttributes?.template_reviewer_id) {
+      Company.removeAttribute('template_reviewer_id');
+    }
     console.warn(
       'companies.template_reviewer_id is missing — company list/API works, ' +
       'but template reviewer assignment is disabled until the column is added.'
@@ -141,9 +143,16 @@ function getTemplateReviewerInclude(User) {
   };
 }
 
+function getCompanyListAttributes(attributes) {
+  if (!Array.isArray(attributes)) return attributes;
+  if (templateReviewerColumnAvailable) return attributes;
+  return attributes.filter((attr) => attr !== 'template_reviewer_id');
+}
+
 module.exports = {
   initializeCompanySchemaFeatures,
   isTemplateReviewerColumnAvailable,
   isStatusDeadlineDaysColumnAvailable,
-  getTemplateReviewerInclude
+  getTemplateReviewerInclude,
+  getCompanyListAttributes
 };
