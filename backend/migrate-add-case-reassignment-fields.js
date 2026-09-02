@@ -4,13 +4,14 @@
  */
 require('dotenv').config();
 const { sequelize } = require('./src/config/database');
+const { Case } = require('./src/models');
 const { ensureCaseReassignmentSchema } = require('./src/utils/ensureCaseReassignmentSchema');
 
 async function migrate() {
   try {
     await sequelize.authenticate();
     console.log('Database connected');
-    await ensureCaseReassignmentSchema(sequelize);
+    await ensureCaseReassignmentSchema(sequelize, Case);
     console.log('✅ Case reassignment columns ready (previous_assigned_to, reassigned_by, reassigned_at)');
     console.log('✅ case_reassigned notification type ensured (if Postgres enum)');
   } catch (error) {

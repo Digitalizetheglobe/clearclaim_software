@@ -106,7 +106,7 @@ async function startServer() {
 
     try {
       const { ensureCaseReassignmentSchema } = require('./src/utils/ensureCaseReassignmentSchema');
-      await ensureCaseReassignmentSchema(sequelize);
+      await ensureCaseReassignmentSchema(sequelize, models.Case);
     } catch (schemaErr) {
       console.warn('Case reassignment schema ensure failed:', schemaErr.message);
     }
