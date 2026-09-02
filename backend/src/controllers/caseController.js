@@ -1,6 +1,10 @@
 const { Case, User, Company, Notification } = require('../models');
 const { Op, sequelize } = require('sequelize');
 const { getTemplateReviewerInclude } = require('../utils/companySchemaFeatures');
+const {
+  isCaseReassignmentSchemaAvailable,
+  getCaseReassignmentIncludes
+} = require('../utils/ensureCaseReassignmentSchema');
 
 // Generate unique case ID (CC-YYYY-XXXX format)
 const generateCaseId = async () => {
@@ -281,7 +285,7 @@ const updateCase = async (req, res) => {
         updateFields.assigned_to = normalizedAssignedTo;
 
         // Track reassignment so previous employee still sees a disabled case card
-        if (isChangingOwner && (isSuperAdmin || isAdmin)) {
+        if (isChangingOwner && (isSuperAdmin || isAdmin) && isCaseReassignmentSchemaAvailable()) {
           updateFields.previous_assigned_to = previousAssigneeId;
           updateFields.reassigned_by = req.user.id;
           updateFields.reassigned_at = new Date();
@@ -368,18 +372,7 @@ const updateCase = async (req, res) => {
               as: 'assignedUser',
               attributes: ['id', 'name', 'email']
             },
-            {
-              model: User,
-              as: 'previousAssignedUser',
-              attributes: ['id', 'name', 'email'],
-              required: false
-            },
-            {
-              model: User,
-              as: 'reassignedByUser',
-              attributes: ['id', 'name', 'email'],
-              required: false
-            }
+            ...getCaseReassignmentIncludes(User)
           ]
         });
 
@@ -556,18 +549,7 @@ const getMyAssignedCases = async (req, res) => {
         as: 'assignedUser',
         attributes: ['id', 'name', 'email']
       },
-      {
-        model: User,
-        as: 'previousAssignedUser',
-        attributes: ['id', 'name', 'email'],
-        required: false
-      },
-      {
-        model: User,
-        as: 'reassignedByUser',
-        attributes: ['id', 'name', 'email'],
-        required: false
-      },
+      ...getCaseReassignmentIncludes(User),
       {
         model: Company,
         as: 'companies',
@@ -585,6 +567,8 @@ const getMyAssignedCases = async (req, res) => {
     const activeWhere = { assigned_to: userId };
     if (status) activeWhere.status = status;
 
+    const reassignmentColumnsReady = isCaseReassignmentSchemaAvailable();
+
     // Reassigned away: still show as disabled for the previous employee
     const reassignedAwayWhere = {
       previous_assigned_to: userId,
@@ -600,12 +584,14 @@ const getMyAssignedCases = async (req, res) => {
         offset: parseInt(offset)
       }),
       // Load reassigned-away without pagination offset so they always appear for awareness
-      Case.findAll({
-        where: reassignedAwayWhere,
-        include: caseIncludes,
-        order: [['reassigned_at', 'DESC']],
-        limit: 50
-      })
+      reassignmentColumnsReady
+        ? Case.findAll({
+            where: reassignedAwayWhere,
+            include: caseIncludes,
+            order: [['reassigned_at', 'DESC']],
+            limit: 50
+          })
+        : Promise.resolve([])
     ]);
 
     const formatCase = (caseItem, isReassignedAway = false) => ({
