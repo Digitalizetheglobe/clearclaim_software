@@ -7,9 +7,11 @@ const {
   isDataReviewApprovedStatus,
   isDataReviewRejectedStatus,
   isExcelDataReviewStatus,
+  isDigitalFormsReviewStatus,
   EXCEL_DATA_REVIEW_STATUSES,
   COMPANY_WORKFLOW_STATUS,
-  enrichCompanyTemplateReviewer
+  enrichCompanyTemplateReviewer,
+  getEffectiveTemplateReviewerId
 } = require('../utils/reviewAssignment');
 const {
   getTemplateReviewerInclude,
@@ -1656,10 +1658,24 @@ const reassignCompanyReviewers = async (req, res) => {
 
     const { companyId } = req.params;
     const { excel_reviewer_id, template_reviewer_id } = req.body;
+    const hasTemplateColumn = isTemplateReviewerColumnAvailable();
 
     if (excel_reviewer_id === undefined && template_reviewer_id === undefined) {
       return res.status(400).json({
         error: 'Provide excel_reviewer_id and/or template_reviewer_id to reassign.'
+      });
+    }
+
+    // Legacy prod DBs store both reviewers on assigned_to. Changing both in one
+    // request would overwrite each other.
+    if (
+      !hasTemplateColumn &&
+      excel_reviewer_id !== undefined &&
+      template_reviewer_id !== undefined
+    ) {
+      return res.status(409).json({
+        error:
+          'This database cannot store Excel and template reviewers separately. Reassign one reviewer at a time.'
       });
     }
 
@@ -1740,13 +1756,6 @@ const reassignCompanyReviewers = async (req, res) => {
     }
 
     if (template_reviewer_id !== undefined) {
-      if (!isTemplateReviewerColumnAvailable()) {
-        return res.status(409).json({
-          error:
-            'template_reviewer_id column is not available on this database. Run the template reviewer migration first.'
-        });
-      }
-
       const newId =
         template_reviewer_id === null || template_reviewer_id === ''
           ? null
@@ -1768,10 +1777,26 @@ const reassignCompanyReviewers = async (req, res) => {
         }
       }
 
-      const previousId =
-        company.template_reviewer_id != null ? Number(company.template_reviewer_id) : null;
+      const previousId = getEffectiveTemplateReviewerId(company);
       if (newId !== previousId) {
-        updateData.template_reviewer_id = newId;
+        if (hasTemplateColumn) {
+          updateData.template_reviewer_id = newId;
+        } else {
+          // Prod RDS often cannot ALTER companies, so template review still
+          // lives on assigned_to (same as submit-for-template-review).
+          const isInDataReview =
+            isExcelDataReviewStatus(company.status) && company.assigned_to != null;
+          if (isInDataReview) {
+            return res.status(409).json({
+              error:
+                'This company is already in Excel/data review. Parallel template review needs the template_reviewer_id database column — ask an admin to run the RDS migration.'
+            });
+          }
+          updateData.assigned_to = newId;
+          if (!isDigitalFormsReviewStatus(company.status)) {
+            updateData.status = COMPANY_WORKFLOW_STATUS.DIGITAL_FORMS_REVIEW;
+          }
+        }
 
         if (previousId && previousId !== newId) {
           notifications.push({
@@ -1800,27 +1825,45 @@ const reassignCompanyReviewers = async (req, res) => {
       }
     }
 
-    const nextExcel =
-      updateData.assigned_to !== undefined ? updateData.assigned_to : company.assigned_to;
-    const nextTemplate =
-      updateData.template_reviewer_id !== undefined
-        ? updateData.template_reviewer_id
-        : company.template_reviewer_id;
-    if (
-      nextExcel != null &&
-      nextTemplate != null &&
-      Number(nextExcel) === Number(nextTemplate)
-    ) {
-      return res.status(400).json({
-        error: 'Excel reviewer and template reviewer must be different users.'
-      });
+    if (hasTemplateColumn) {
+      const nextExcel =
+        updateData.assigned_to !== undefined ? updateData.assigned_to : company.assigned_to;
+      const nextTemplate =
+        updateData.template_reviewer_id !== undefined
+          ? updateData.template_reviewer_id
+          : getEffectiveTemplateReviewerId(company);
+      if (
+        nextExcel != null &&
+        nextTemplate != null &&
+        Number(nextExcel) === Number(nextTemplate)
+      ) {
+        return res.status(400).json({
+          error: 'Excel reviewer and template reviewer must be different users.'
+        });
+      }
     }
 
     if (Object.keys(updateData).length === 0) {
       return res.status(400).json({ error: 'No reviewer changes to apply.' });
     }
 
+    const previousStatus = company.status;
     await company.update(updateData);
+
+    if (updateData.status && updateData.status !== previousStatus) {
+      try {
+        await recordCompanyStatusChange({
+          companyId: company.id,
+          fromStatus: previousStatus,
+          toStatus: updateData.status,
+          changedBy: req.user?.id,
+          changeSource: 'reviewer_reassign',
+          note: 'Status updated while reassigning template reviewer'
+        });
+      } catch (statusErr) {
+        console.warn('Reviewer reassignment status history skipped:', statusErr.message);
+      }
+    }
 
     for (const n of notifications) {
       try {
@@ -1846,6 +1889,7 @@ const reassignCompanyReviewers = async (req, res) => {
 
     const updatedCompany = await Company.findByPk(companyId, {
       include: [
+        { model: Case, as: 'case', attributes: ['id', 'case_id', 'case_title'] },
         { model: User, as: 'assignedUser', attributes: ['id', 'name', 'email'] },
         { model: User, as: 'createdByUser', attributes: ['id', 'name', 'email'] },
         getTemplateReviewerInclude(User)
