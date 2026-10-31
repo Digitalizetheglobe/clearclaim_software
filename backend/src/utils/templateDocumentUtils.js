@@ -2093,6 +2093,8 @@ const postProcessDocumentXml = (xml) => {
   // to extra mostly-blank pages.
   result = defloatFormBLayoutAnchors(result);
   result = fixIsr4TranspositionSectionCTable(result);
+  result = result.replace(/\s*\(#\)(?=,\s*on\s+my\/our\s+behalf)/gi, '');
+  result = result.replace(/\s*\(#\)(?=,\s*I\b|,\s*We\b)/gi, '');
   return result;
 };
 
@@ -2143,6 +2145,24 @@ const toDisplayTemplateName = (filename) => {
     if (lower.includes('multiple')) return 'Indemnity Bond IEPF - Multiple Claimant';
     if (lower.includes('single')) return 'Indemnity Bond IEPF - Single Claimant';
     return 'Indemnity Bond IEPF';
+  }
+  if (lower.includes('annexure 3') || lower.includes('annexure_3')) {
+    if (lower.includes('multiple')) return 'Annexure 3 - Multiple Claimant';
+    if (lower.includes('single')) return 'Annexure 3 - Single Claimant';
+    return 'Annexure 3';
+  }
+  if (lower.includes('annexure 4') || lower.includes('annexure_4')) {
+    if (lower.includes('multiple') && lower.includes('other legal')) return 'Annexure 4 - Multiple Claimant with other Legal Heirs';
+    if (lower.includes('single') && (lower.includes('no legal') || lower.includes('no legal heir'))) return 'Annexure 4 - Single Claimant & No Legal Heirs';
+    if (lower.includes('single') && lower.includes('other legal')) return 'Annexure 4 - Single Claimant with other Legal Heirs';
+    return 'Annexure 4';
+  }
+  if (lower.includes('annexure 5') || lower.includes('annexure_5')) {
+    if (lower.includes('multiple') && (lower.includes('no legal') || lower.includes('no legal heir'))) return 'Annexure 5 - Multiple Claimant & No Legal Heir';
+    if (lower.includes('multiple') && lower.includes('other legal')) return 'Annexure 5 - Multiple Claimant with other Legal Heirs';
+    if (lower.includes('single') && (lower.includes('no legal') || lower.includes('no legal heir'))) return 'Annexure 5 - Single Claimant & No Legal Heir';
+    if (lower.includes('single') && lower.includes('other legal')) return 'Annexure 5 - Single Claimant with other Legal Heirs';
+    return 'Annexure 5';
   }
   return raw
     .replace(/_Template\.docx$/i, '')
