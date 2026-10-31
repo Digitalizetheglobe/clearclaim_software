@@ -13,7 +13,7 @@ const {
   resolveBankAccountNumber,
   composeBankPostalAddress,
 } = require('../utils/bankFieldMapping');
-const { applyCanonicalRtaName, isRtaNameFieldKey, resolveRtaName } = require('../utils/rtaFieldMapping');
+const { applyCanonicalRtaName, isRtaNameFieldKey, resolveRtaName, resolveRtaAddress, resolveRtaCity, resolveRtaPin } = require('../utils/rtaFieldMapping');
 const {
   applyShareCertificateMappings,
   applyNameAsPerCertFallbacks,
@@ -319,7 +319,6 @@ const getCompanyTemplates = async (req, res) => {
 
       for (const existing of allTemplates) {
         const file = path.basename(String(existing.template_path || ''));
-        if (!/iepf/i.test(file)) continue;
         const nextName = cleanTemplateName(file);
         const nextCategory = categorizeTemplate(file);
         if (existing.template_name !== nextName || existing.template_category !== nextCategory) {
@@ -788,10 +787,12 @@ const mapCompanyValuesToTemplate = async (companyId, templatePath) => {
         }
         
         // Handle deceased relation fields dynamically
-        if (key.includes('deceased relation c') && key.match(/c\d+$/)) {
-          const suffix = key.match(/c(\d+)$/)[1];
+        if ((key.includes('deceased relation') || key.includes('relation with deceased') || key.includes('relationship with deceased')) && key.match(/c\s*\d+$/i)) {
+          const suffix = key.match(/c\s*(\d+)$/i)[1];
           const fieldKey = `Deceased Relation C${suffix}`;
           if (!valueMap[fieldKey]) valueMap[fieldKey] = cv.field_value;
+          if (!valueMap[`Relation with Deceased C${suffix}`]) valueMap[`Relation with Deceased C${suffix}`] = cv.field_value;
+          if (!valueMap[`Relationship with Deceased C${suffix}`]) valueMap[`Relationship with Deceased C${suffix}`] = cv.field_value;
           if (!valueMap[`relation_c${suffix}`]) valueMap[`relation_c${suffix}`] = cv.field_value;
         }
         
@@ -916,7 +917,7 @@ const mapCompanyValuesToTemplate = async (companyId, templatePath) => {
           if (!valueMap['iepf_dividends_details']) valueMap['iepf_dividends_details'] = cv.field_value;
         }
         // Legal heir relation fields
-        if ((key.includes('relation lh') || label.includes('relation lh')) && key.match(/lh\d+/i)) {
+        if ((key.includes('relation lh') || label.includes('relation lh') || key.includes('relationship with deceased lh') || label.includes('relationship with deceased lh')) && (key.match(/lh\d+/i) || label.match(/lh\d+/i))) {
           const lhMatch = key.match(/lh(\d+)/i) || label.match(/lh(\d+)/i);
           if (lhMatch) {
             const lhNum = lhMatch[1];
@@ -924,8 +925,33 @@ const mapCompanyValuesToTemplate = async (companyId, templatePath) => {
             if (!valueMap[relationKey]) valueMap[relationKey] = cv.field_value;
             if (!valueMap[`Relation with Deceased Person LH${lhNum}`]) valueMap[`Relation with Deceased Person LH${lhNum}`] = cv.field_value;
             if (!valueMap[`Relation with Deceased LH${lhNum}`]) valueMap[`Relation with Deceased LH${lhNum}`] = cv.field_value;
+            if (!valueMap[`Relationship with Deceased LH${lhNum}`]) valueMap[`Relationship with Deceased LH${lhNum}`] = cv.field_value;
             if (!valueMap[`Claimant Relation LH${lhNum}`]) valueMap[`Claimant Relation LH${lhNum}`] = cv.field_value;
             if (!valueMap[`relation_lh${lhNum}`]) valueMap[`relation_lh${lhNum}`] = cv.field_value;
+          }
+        }
+        if ((key.includes('address lh') || label.includes('address lh')) && (key.match(/lh\d+/i) || label.match(/lh\d+/i))) {
+          const lhMatch = key.match(/lh(\d+)/i) || label.match(/lh(\d+)/i);
+          if (lhMatch) {
+            const lhNum = lhMatch[1];
+            valueMap[`Address LH${lhNum}`] = cv.field_value;
+            valueMap[`address_lh${lhNum}`] = cv.field_value;
+          }
+        }
+        if ((key.includes('mobile no lh') || key.includes('mobile lh') || label.includes('mobile no lh') || label.includes('mobile lh')) && (key.match(/lh\d+/i) || label.match(/lh\d+/i))) {
+          const lhMatch = key.match(/lh(\d+)/i) || label.match(/lh(\d+)/i);
+          if (lhMatch) {
+            const lhNum = lhMatch[1];
+            valueMap[`Mobile No LH${lhNum}`] = cv.field_value;
+            valueMap[`mobile_lh${lhNum}`] = cv.field_value;
+          }
+        }
+        if ((key.includes('age lh') || label.includes('age lh')) && (key.match(/lh\d+/i) || label.match(/lh\d+/i))) {
+          const lhMatch = key.match(/lh(\d+)/i) || label.match(/lh(\d+)/i);
+          if (lhMatch) {
+            const lhNum = lhMatch[1];
+            valueMap[`Age LH${lhNum}`] = cv.field_value;
+            valueMap[`age_lh${lhNum}`] = cv.field_value;
           }
         }
         // Handle Date of Issue field
@@ -987,6 +1013,9 @@ const mapCompanyValuesToTemplate = async (companyId, templatePath) => {
       'Current Date': formatDate(new Date()),
       'Today Date': formatDate(new Date()),
       'RTA Name': getValueOrPlaceholder(resolveRtaName(valueMap), 'RTA Name'),
+      'RTA Address': getValueOrPlaceholder(resolveRtaAddress(valueMap), 'RTA Address'),
+      'RTA City': getValueOrPlaceholder(resolveRtaCity(valueMap), 'RTA City'),
+      'RTA PIN': getValueOrPlaceholder(resolveRtaPin(valueMap), 'RTA PIN'),
       'Total Dividend Amount': getValueOrPlaceholder(
         valueMap['total_dividend_amount'] ||
           valueMap['Total Dividend Amount'] ||
@@ -1237,9 +1266,11 @@ const mapCompanyValuesToTemplate = async (companyId, templatePath) => {
         `Deceased Relation ${cnSuffix}`
       );
       templateMappings[`Relation with Deceased ${cnSuffix}`] = getValueOrPlaceholder(
-        valueMap[`relation_c${num}`] || valueMap[`Deceased Relation ${cnSuffix}`] || valueMap[`Relation with Deceased ${cnSuffix}`],
+        valueMap[`relation_c${num}`] || valueMap[`Deceased Relation ${cnSuffix}`] || valueMap[`Relation with Deceased ${cnSuffix}`] || valueMap[`Relationship with Deceased ${cnSuffix}`] || valueMap[`Claimant Relation ${cnSuffix}`],
         `Relation with Deceased ${cnSuffix}`
       );
+      templateMappings[`Relationship with Deceased ${cnSuffix}`] = templateMappings[`Relation with Deceased ${cnSuffix}`];
+      templateMappings[`Relation ${cnSuffix}`] = templateMappings[`Relation with Deceased ${cnSuffix}`];
       // CRITICAL FIX: Ensure Address C1 maps to claimant address, not bank address
       // First, try to find the correct claimant address
       const claimantAddress = valueMap[`address_c${num}`] || 
@@ -1831,6 +1862,11 @@ const mapCompanyValuesToTemplate = async (companyId, templatePath) => {
     templateMappings['Claimant Names'] = claimantNamesJoined;
     templateMappings['All Claimant Names'] = claimantNamesJoined;
     templateMappings['Name(s) of the legal heir(s)/claimant(s)'] = claimantNamesJoined;
+
+    // In Annexure 4, [Name as per Aadhar C1] is already in the indemnity clause right before [Name(s) of the legal heir(s)/claimant(s)]
+    if (/annexure[_\s]*4/i.test(templatePath)) {
+      templateMappings['Name(s) of the legal heir(s)/claimant(s)'] = '';
+    }
     
     // Global "Date of demise**" mapping for ISR-5 templates (uses first available DOD value)
     // This handles cases where the template has a single "Date of demise**" placeholder
@@ -2146,6 +2182,20 @@ const generateMappingPreview = (valueMap, templatePath) => {
     'Total Shares': ['total_shares', 'shares', 'number_of_shares'],
     'Face Value': ['face_value', 'fv', 'facevalue', 'face_val'],
     'Folio No': ['folio_no', 'folio', 'folio_number'],
+    'RTA Name': ['rta_name', 'rta', 'registrar_name'],
+    'RTA Address': ['rta_address', 'registrar_address'],
+    'RTA City': ['rta_city', 'registrar_city'],
+    'RTA PIN': ['rta_pin', 'registrar_pin'],
+    'Relation with Deceased C1': ['deceased_relation_c1', 'relation_with_deceased_c1', 'relation_c1'],
+    'Relation with Deceased C2': ['deceased_relation_c2', 'relation_with_deceased_c2', 'relation_c2'],
+    'Relation with Deceased C3': ['deceased_relation_c3', 'relation_with_deceased_c3', 'relation_c3'],
+    'Bank Name C1': ['bank_name_c1', 'bank_name'],
+    'Bank AC C1': ['bank_ac_c1', 'bank_account_c1', 'bank_account_number_c1'],
+    'IFSC C1': ['ifsc_c1', 'ifsc_code'],
+    'MICR C1': ['micr_c1', 'micr_code'],
+    'Bank Branch C1': ['bank_branch_c1', 'bank_branch'],
+    'Bank City C1': ['bank_city_c1', 'bank_city'],
+    'Bank PIN C1': ['bank_pin_c1', 'bank_pin'],
     
     // Securities details
     'NOS1': ['nos1', 'number_of_securities_1', 'securities_1'],

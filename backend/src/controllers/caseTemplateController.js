@@ -46,6 +46,8 @@ const getAllTemplates = async (req, res) => {
         category = 'indemnity_bond';
       } else if (lower.includes('annexure-f')) {
         category = 'noc';
+      } else if (lower.includes('annexure')) {
+        category = 'annexures';
       } else if (lower.includes('form-a') || lower.includes('form a')) {
         category = 'affidavit';
       } else if (lower.includes('form-b') || lower.includes('form b')) {
@@ -414,6 +416,33 @@ const mapCaseValuesToTemplate = async (caseId, templatePath) => {
           valueMap['Relationship'] = value;
           valueMap['Relation with Deceased'] = value;
         }
+        if ((key.includes('deceased relation') || key.includes('relation with deceased') || key.includes('relationship with deceased')) && key.match(/c\s*\d+$/i)) {
+          const suffix = key.match(/c\s*(\d+)$/i)[1];
+          valueMap[`Deceased Relation C${suffix}`] = value;
+          valueMap[`Relation with Deceased C${suffix}`] = value;
+          valueMap[`Relationship with Deceased C${suffix}`] = value;
+          valueMap[`relation_c${suffix}`] = value;
+        }
+        for (let lh = 1; lh <= 10; lh++) {
+          if (key.toLowerCase() === `relation lh${lh}` || key.toLowerCase() === `relation_lh${lh}` || key.toLowerCase().includes(`relation with deceased lh${lh}`)) {
+            valueMap[`Relation LH${lh}`] = value;
+            valueMap[`Relation with Deceased LH${lh}`] = value;
+            valueMap[`Relationship with Deceased LH${lh}`] = value;
+            valueMap[`relation_lh${lh}`] = value;
+          }
+          if (key.toLowerCase() === `age lh${lh}` || key.toLowerCase() === `age_lh${lh}`) {
+            valueMap[`Age LH${lh}`] = value;
+            valueMap[`age_lh${lh}`] = value;
+          }
+          if (key.toLowerCase() === `address lh${lh}` || key.toLowerCase() === `address_lh${lh}`) {
+            valueMap[`Address LH${lh}`] = value;
+            valueMap[`address_lh${lh}`] = value;
+          }
+          if (key.toLowerCase() === `mobile no lh${lh}` || key.toLowerCase() === `mobile_lh${lh}` || key.toLowerCase() === `mobile lh${lh}`) {
+            valueMap[`Mobile No LH${lh}`] = value;
+            valueMap[`mobile_lh${lh}`] = value;
+          }
+        }
         
         // Father name mapping
         if (key.includes('Father Name C1')) {
@@ -454,6 +483,16 @@ const mapCaseValuesToTemplate = async (caseId, templatePath) => {
     applyCanonicalRtaName(valueMap);
     applyShareCertificateMappings(valueMap);
     applyNameAsPerCertFallbacks(valueMap);
+
+    if (!valueMap['City']) {
+      valueMap['City'] = valueMap['City C1'] || valueMap['city_c1'] || valueMap['city'] || '';
+    }
+    if (!valueMap['State']) {
+      valueMap['State'] = valueMap['State C1'] || valueMap['state_c1'] || valueMap['state'] || '';
+    }
+    if (/annexure[_\s]*4/i.test(templatePath)) {
+      valueMap['Name(s) of the legal heir(s)/claimant(s)'] = '';
+    }
     
     // Debug: Log final mapping count and check for conflicts
     console.log(`Created ${Object.keys(valueMap).length} total mappings`);
@@ -702,7 +741,14 @@ const generateMappingPreview = (valueMap, templatePath, templateStructure) => {
 
 // Get template description based on filename
 const getTemplateDescription = (templatePath) => {
-  if (templatePath.includes('Annexure-D')) {
+  const lower = templatePath.toLowerCase();
+  if (lower.includes('annexure 3') || lower.includes('annexure_3')) {
+    return 'Transmission Request Form (Annexure 3)';
+  } else if (lower.includes('annexure 4') || lower.includes('annexure_4')) {
+    return 'Affidavit for Transmission of Securities (Annexure 4)';
+  } else if (lower.includes('annexure 5') || lower.includes('annexure_5')) {
+    return 'Indemnity Bond for Transmission without Legal Representation (Annexure 5)';
+  } else if (templatePath.includes('Annexure-D')) {
     return 'Individual affidavit document for legal heir claiming process';
   } else if (templatePath.includes('Annexure-E')) {
     return 'Indemnity bond document for securing claims';
