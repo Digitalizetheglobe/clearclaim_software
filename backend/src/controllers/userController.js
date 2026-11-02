@@ -18,7 +18,15 @@ const getAllUsers = async (req, res) => {
 // Get user by ID
 const getUserById = async (req, res) => {
   try {
-    const user = await User.findByPk(req.params.id, {
+    const userId = Number(req.params.id);
+    if (!Number.isSafeInteger(userId) || userId <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid user ID'
+      });
+    }
+
+    const user = await User.findByPk(userId, {
       attributes: { exclude: ["password"] },
     });
 
@@ -106,7 +114,15 @@ const updateUser = async (req, res) => {
 // Delete user
 const deleteUser = async (req, res) => {
   try {
-    const user = await User.findByPk(req.params.id);
+    const userId = Number(req.params.id);
+    if (!Number.isSafeInteger(userId) || userId <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid user ID'
+      });
+    }
+
+    const user = await User.findByPk(userId);
 
     if (!user) {
       return res.status(404).json({ error: "User not found." });
