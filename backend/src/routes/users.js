@@ -202,10 +202,61 @@ router.get('/', async (req, res) => {
   }
 });
 
+// Get users with case summary (for dashboard)
+router.get('/summary/cases', async (req, res) => {
+  try {
+    const users = await User.findAll({
+      attributes: ['id', 'name', 'email', 'role'],
+      include: [
+        {
+          model: Case,
+          as: 'assignedCases',
+          attributes: ['status'],
+          required: false
+        }
+      ]
+    });
+
+    const userCaseSummary = users.map(user => {
+      const assignedCases = user.assignedCases || [];
+      // Normalize role to array (for backward compatibility)
+      const userRoles = Array.isArray(user.role) ? user.role : [user.role];
+      
+      return {
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        role: userRoles,
+        caseSummary: {
+          total: assignedCases.length,
+          active: assignedCases.filter(c => c.status === 'active').length,
+          completed: assignedCases.filter(c => c.status === 'completed').length,
+          pending: assignedCases.filter(c => c.status === 'pending').length
+        }
+      };
+    });
+
+    res.json({ 
+      userCaseSummary,
+      total: userCaseSummary.length
+    });
+  } catch (error) {
+    console.error('Get user case summary error:', error);
+    res.status(500).json({ error: 'Failed to fetch user case summary.' });
+  }
+});
+
 // Get user by ID with case details
 router.get('/:id', async (req, res) => {
   try {
-    const userId = req.params.id;
+    const userId = Number(req.params.id);
+
+    if (!Number.isSafeInteger(userId) || userId <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid user ID'
+      });
+    }
     
     const user = await User.findByPk(userId, {
       attributes: { exclude: ['password'] },
@@ -284,10 +335,18 @@ router.get('/:id', async (req, res) => {
 // Update user (Admin or Super Admin)
 router.put('/:id', auth, requireRole(['admin', 'super_admin']), async (req, res) => {
   try {
-    const { id } = req.params;
+    const userId = Number(req.params.id);
+
+    if (!Number.isSafeInteger(userId) || userId <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid user ID'
+      });
+    }
+
     const { name, email, role } = req.body;
 
-    const user = await User.findByPk(id);
+    const user = await User.findByPk(userId);
     if (!user) {
       return res.status(404).json({ error: 'User not found.' });
     }
@@ -349,11 +408,11 @@ router.put('/:id', auth, requireRole(['admin', 'super_admin']), async (req, res)
         const [results] = await sequelize.query(
           `UPDATE users SET role = $1::jsonb WHERE id = $2 RETURNING id`,
           {
-            bind: [JSON.stringify(rolesArray), parseInt(id)],
+            bind: [JSON.stringify(rolesArray), userId],
             type: sequelize.QueryTypes.UPDATE
           }
         );
-        console.log(`✅ Updated role for user ${id} to:`, rolesArray);
+        console.log(`✅ Updated role for user ${userId} to:`, rolesArray);
       } catch (roleError) {
         console.error('Role update error:', roleError);
         // If raw SQL fails, the column might still be ENUM - provide helpful error
@@ -367,7 +426,7 @@ router.put('/:id', auth, requireRole(['admin', 'super_admin']), async (req, res)
     }
 
     // Fetch updated user with case details
-    const updatedUser = await User.findByPk(id, {
+    const updatedUser = await User.findByPk(userId, {
       attributes: { exclude: ['password'] },
       include: [
         {
@@ -461,16 +520,23 @@ router.put('/:id', auth, requireRole(['admin', 'super_admin']), async (req, res)
 // Delete user (Admin or Super Admin — Super Admin cannot delete Admin/Super Admin)
 router.delete('/:id', auth, requireRole(['admin', 'super_admin']), async (req, res) => {
   try {
-    const { id } = req.params;
+    const userId = Number(req.params.id);
 
-    const user = await User.findByPk(id);
+    if (!Number.isSafeInteger(userId) || userId <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid user ID'
+      });
+    }
+
+    const user = await User.findByPk(userId);
     if (!user) {
       return res.status(404).json({ error: 'User not found.' });
     }
 
     // Prevent self-deletion
     const currentUserId = req.user?.id;
-    if (currentUserId && parseInt(id) === parseInt(currentUserId)) {
+    if (currentUserId && userId === parseInt(currentUserId)) {
       return res.status(400).json({ error: 'You cannot delete your own account.' });
     }
 
@@ -498,50 +564,6 @@ router.delete('/:id', auth, requireRole(['admin', 'super_admin']), async (req, r
       error: 'Failed to delete user.',
       details: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
-  }
-});
-
-// Get users with case summary (for dashboard)
-router.get('/summary/cases', async (req, res) => {
-  try {
-    const users = await User.findAll({
-      attributes: ['id', 'name', 'email', 'role'],
-      include: [
-        {
-          model: Case,
-          as: 'assignedCases',
-          attributes: ['status'],
-          required: false
-        }
-      ]
-    });
-
-    const userCaseSummary = users.map(user => {
-      const assignedCases = user.assignedCases || [];
-      // Normalize role to array (for backward compatibility)
-      const userRoles = Array.isArray(user.role) ? user.role : [user.role];
-      
-      return {
-        id: user.id,
-        name: user.name,
-        email: user.email,
-        role: userRoles,
-        caseSummary: {
-          total: assignedCases.length,
-          active: assignedCases.filter(c => c.status === 'active').length,
-          completed: assignedCases.filter(c => c.status === 'completed').length,
-          pending: assignedCases.filter(c => c.status === 'pending').length
-        }
-      };
-    });
-
-    res.json({ 
-      userCaseSummary,
-      total: userCaseSummary.length
-    });
-  } catch (error) {
-    console.error('Get user case summary error:', error);
-    res.status(500).json({ error: 'Failed to fetch user case summary.' });
   }
 });
 
