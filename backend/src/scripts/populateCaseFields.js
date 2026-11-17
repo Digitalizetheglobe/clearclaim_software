@@ -900,6 +900,13 @@ const caseFieldsData = [
     display_order: 121,
   },
   {
+    field_key: "Total Shares in Words",
+    field_label: "Total Shares in Words",
+    field_type: "text",
+    field_category: "company_info",
+    display_order: 121.5,
+  },
+  {
     field_key: "Face Value",
     field_label: "Face Value",
     field_type: "number",

@@ -3,7 +3,7 @@ const fs = require('fs').promises;
 const path = require('path');
 const Docxtemplater = require('docxtemplater');
 const PizZip = require('pizzip');
-const { postProcessDocxZip, sanitizeTemplateZip, isSelectableTemplateFile, toDisplayTemplateName, toPopulatedDownloadName } = require('../utils/templateDocumentUtils');
+const { postProcessDocxZip, sanitizeTemplateZip, isSelectableTemplateFile, toDisplayTemplateName, toPopulatedDownloadName, convertNumberToWords } = require('../utils/templateDocumentUtils');
 const { applyCanonicalBankFields } = require('../utils/bankFieldMapping');
 const { applyCanonicalRtaName } = require('../utils/rtaFieldMapping');
 const { applyShareCertificateMappings, applyNameAsPerCertFallbacks } = require('../utils/shareCertificateMapping');
@@ -52,14 +52,18 @@ const getAllTemplates = async (req, res) => {
         category = 'affidavit';
       } else if (lower.includes('form-b') || lower.includes('form b')) {
         category = 'indemnity';
-      } else if (lower.includes('isr-')) {
+      } else if (lower.includes('isr')) {
         category = 'isr';
       } else if (lower.includes('name mismatch')) {
         category = 'name_mismatch';
-      } else if (lower.includes('sh-13')) {
+      } else if (lower.includes('sh-13') || lower.includes('sh13')) {
         category = 'sh13';
       } else if (lower.includes('iepf')) {
         category = 'iepf';
+      } else if (lower.includes('dcrf')) {
+        category = 'dcrf';
+      } else if (lower.includes('affidavit') && lower.includes('indemnity')) {
+        category = 'indemnity';
       }
 
       return {
@@ -483,6 +487,9 @@ const mapCaseValuesToTemplate = async (caseId, templatePath) => {
     applyCanonicalRtaName(valueMap);
     applyShareCertificateMappings(valueMap);
     applyNameAsPerCertFallbacks(valueMap);
+    if (!valueMap['Name as per Cert C1'] || String(valueMap['Name as per Cert C1']).startsWith('[')) {
+      valueMap['Name as per Cert C1'] = valueMap['Name as per Aadhar C1'] || '';
+    }
 
     if (!valueMap['City']) {
       valueMap['City'] = valueMap['City C1'] || valueMap['city_c1'] || valueMap['city'] || '';
@@ -493,6 +500,30 @@ const mapCaseValuesToTemplate = async (caseId, templatePath) => {
     if (/annexure[_\s]*4/i.test(templatePath)) {
       valueMap['Name(s) of the legal heir(s)/claimant(s)'] = '';
     }
+
+    const totalSharesVal = valueMap['Total Shares'] || valueMap['total_shares'];
+    if (!valueMap['Total Shares in Words'] && totalSharesVal) {
+      valueMap['Total Shares in Words'] = convertNumberToWords(totalSharesVal);
+    }
+
+    const yopVal = valueMap['Year of Purchase 1'] || valueMap['Year of Purchase1'] || valueMap['year_of_purchase_1'] || valueMap['year_of_purchase1'] || '';
+    if (yopVal) {
+      valueMap['Year of Purchase 1'] = yopVal;
+      valueMap['Year of Purchase1'] = yopVal;
+    }
+
+    if (!valueMap['Nominee Witness Name'] && valueMap['nominee_witness_name']) {
+      valueMap['Nominee Witness Name'] = valueMap['nominee_witness_name'];
+    }
+    if (!valueMap['Nominee Witness Address'] && valueMap['nominee_witness_address']) {
+      valueMap['Nominee Witness Address'] = valueMap['nominee_witness_address'];
+    }
+    if (!valueMap['Nominee Witness PIN'] && valueMap['nominee_witness_pin']) {
+      valueMap['Nominee Witness PIN'] = valueMap['nominee_witness_pin'];
+    }
+
+    valueMap['For issuance of Duplicate Securities'] = '[For issuance of Duplicate Securities]';
+    valueMap['For Issuance of Duplicate Securities'] = '[For Issuance of Duplicate Securities]';
     
     // Debug: Log final mapping count and check for conflicts
     console.log(`Created ${Object.keys(valueMap).length} total mappings`);

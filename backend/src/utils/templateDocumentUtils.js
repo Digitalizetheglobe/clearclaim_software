@@ -2132,6 +2132,59 @@ const isSelectableTemplateFile = (file) => {
   return true;
 };
 
+const convertNumberToWords = (num) => {
+  if (num === null || num === undefined || num === '') return '';
+  const parsed = parseInt(String(num).replace(/,/g, '').trim(), 10);
+  if (isNaN(parsed) || parsed < 0) return '';
+  if (parsed === 0) return 'Zero Only';
+
+  const ones = ['', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine',
+    'Ten', 'Eleven', 'Twelve', 'Thirteen', 'Fourteen', 'Fifteen', 'Sixteen', 'Seventeen', 'Eighteen', 'Nineteen'];
+  const tens = ['', '', 'Twenty', 'Thirty', 'Forty', 'Fifty', 'Sixty', 'Seventy', 'Eighty', 'Ninety'];
+
+  const numToWordsLessThanThousand = (n) => {
+    let str = '';
+    if (n >= 100) {
+      str += ones[Math.floor(n / 100)] + ' Hundred ';
+      n %= 100;
+    }
+    if (n >= 20) {
+      str += tens[Math.floor(n / 10)] + ' ';
+      n %= 10;
+    }
+    if (n > 0) {
+      str += ones[n] + ' ';
+    }
+    return str.trim();
+  };
+
+  let n = parsed;
+  let words = '';
+
+  const crore = Math.floor(n / 10000000);
+  n %= 10000000;
+  const lakh = Math.floor(n / 100000);
+  n %= 100000;
+  const thousand = Math.floor(n / 1000);
+  n %= 1000;
+  const remainder = n;
+
+  if (crore > 0) {
+    words += numToWordsLessThanThousand(crore) + ' Crore ';
+  }
+  if (lakh > 0) {
+    words += numToWordsLessThanThousand(lakh) + ' Lakh ';
+  }
+  if (thousand > 0) {
+    words += numToWordsLessThanThousand(thousand) + ' Thousand ';
+  }
+  if (remainder > 0) {
+    words += numToWordsLessThanThousand(remainder) + ' ';
+  }
+
+  return (words.trim() + ' Only').replace(/\s+/g, ' ');
+};
+
 const toDisplayTemplateName = (filename) => {
   const raw = String(filename || '');
   const lower = raw.toLowerCase();
@@ -2141,10 +2194,23 @@ const toDisplayTemplateName = (filename) => {
   if (lower.includes('form isr-4') && lower.includes('transposition')) {
     return 'Form ISR-4 Transposition';
   }
+  if (lower.includes('form isr-4') && lower.includes('new template')) {
+    return 'Form ISR-4 (New Template)';
+  }
+  if (lower.includes('isr3') || lower.includes('isr-3')) {
+    return 'Form ISR-3';
+  }
   if (lower.includes('iepf') && lower.includes('indemnity')) {
     if (lower.includes('multiple')) return 'Indemnity Bond IEPF - Multiple Claimant';
     if (lower.includes('single')) return 'Indemnity Bond IEPF - Single Claimant';
     return 'Indemnity Bond IEPF';
+  }
+  if (lower.includes('annexure 2') || lower.includes('annexure_2')) {
+    if (lower.includes('multiple') && (lower.includes('no other') || lower.includes('no legal'))) return 'Annexure 2 - Multiple Claimant & No other Legal Heirs';
+    if (lower.includes('multiple') && lower.includes('other legal')) return 'Annexure 2 - Multiple Claimant with other Legal Heirs';
+    if (lower.includes('single') && (lower.includes('no other') || lower.includes('no legal'))) return 'Annexure 2 - Single Claimant & No other Legal Heirs';
+    if (lower.includes('single') && lower.includes('other legal')) return 'Annexure 2 - Single Claimant with other Legal Heirs';
+    return 'Annexure 2';
   }
   if (lower.includes('annexure 3') || lower.includes('annexure_3')) {
     if (lower.includes('multiple')) return 'Annexure 3 - Multiple Claimant';
@@ -2152,8 +2218,9 @@ const toDisplayTemplateName = (filename) => {
     return 'Annexure 3';
   }
   if (lower.includes('annexure 4') || lower.includes('annexure_4')) {
+    if (lower.includes('multiple') && (lower.includes('no legal') || lower.includes('no legal heir') || lower.includes('no other'))) return 'Annexure 4 - Multiple Claimant & No Legal Heirs';
     if (lower.includes('multiple') && lower.includes('other legal')) return 'Annexure 4 - Multiple Claimant with other Legal Heirs';
-    if (lower.includes('single') && (lower.includes('no legal') || lower.includes('no legal heir'))) return 'Annexure 4 - Single Claimant & No Legal Heirs';
+    if (lower.includes('single') && (lower.includes('no legal') || lower.includes('no legal heir') || lower.includes('no other'))) return 'Annexure 4 - Single Claimant & No Legal Heirs';
     if (lower.includes('single') && lower.includes('other legal')) return 'Annexure 4 - Single Claimant with other Legal Heirs';
     return 'Annexure 4';
   }
@@ -2164,7 +2231,26 @@ const toDisplayTemplateName = (filename) => {
     if (lower.includes('single') && lower.includes('other legal')) return 'Annexure 5 - Single Claimant with other Legal Heirs';
     return 'Annexure 5';
   }
+  if (lower.includes('annexure b') || lower.includes('annexure_b')) {
+    const cMatch = lower.match(/claimant\s*c(\d+)/i) || lower.match(/\bc(\d+)\b/i);
+    const lhMatch = lower.match(/\blh(\d+)\b/i);
+    if (cMatch) return `ANNEXURE B - Affidavit Claimant C${cMatch[1]}`;
+    if (lhMatch) return `ANNEXURE B - Affidavit LH${lhMatch[1]}`;
+    return 'ANNEXURE B - Affidavit';
+  }
+  if (lower.includes('dcrf')) {
+    const isCdsl = lower.includes('cdsl');
+    const isNsdl = lower.includes('nsdl');
+    const isMultiple = lower.includes('multiple');
+    const system = isCdsl ? 'CDSL' : isNsdl ? 'NSDL' : '';
+    const claimantType = isMultiple ? 'Multiple Claimant' : 'Single Claimant';
+    return `DCRF ${system} - ${claimantType}`.trim();
+  }
+  if (lower.includes('affidavit cum indemnity bond') && lower.includes('trans single')) {
+    return 'Affidavit Cum Indemnity Bond - Trans Single Claimant';
+  }
   return raw
+    .replace(/\s*\(\d+\)\.docx$/i, '.docx')
     .replace(/_Template\.docx$/i, '')
     .replace(/\.docx$/i, '')
     .replace(/_/g, ' ')
@@ -2206,4 +2292,5 @@ module.exports = {
   toDisplayTemplateName,
   toPopulatedDownloadName,
   fixIsr4TranspositionSectionCTable,
+  convertNumberToWords,
 };

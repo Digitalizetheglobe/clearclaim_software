@@ -6,7 +6,7 @@ const Docxtemplater = require('docxtemplater');
 const PizZip = require('pizzip');
 const { COMPANY_WORKFLOW_STATUS } = require('../utils/reviewAssignment');
 const { recordCompanyStatusChange } = require('../utils/companyStatusHistory');
-const { postProcessDocxZip, cleanFormattedListText, sanitizeTemplateZip, isSelectableTemplateFile, toDisplayTemplateName, toPopulatedDownloadName } = require('../utils/templateDocumentUtils');
+const { postProcessDocxZip, cleanFormattedListText, sanitizeTemplateZip, isSelectableTemplateFile, toDisplayTemplateName, toPopulatedDownloadName, convertNumberToWords } = require('../utils/templateDocumentUtils');
 const {
   applyCanonicalBankFields,
   mergeClaimantBankFields,
@@ -240,12 +240,16 @@ const categorizeTemplate = (filename) => {
     return 'FORM_A';
   } else if (lowerFilename.includes('form-b') || lowerFilename.includes('form b')) {
     return 'FORM_B';
-  } else if (lowerFilename.includes('isr-')) {
+  } else if (lowerFilename.includes('isr')) {
     return 'ISR_FORMS';
   } else if (lowerFilename.includes('annexure')) {
     return 'ANNEXURES';
   } else if (lowerFilename.includes('iepf')) {
     return 'IEPF';
+  } else if (lowerFilename.includes('dcrf')) {
+    return 'DCRF';
+  } else if (lowerFilename.includes('affidavit') && lowerFilename.includes('indemnity')) {
+    return 'AFFIDAVIT_INDEMNITY';
   } else {
     return 'OTHER';
   }
@@ -710,6 +714,15 @@ const mapCompanyValuesToTemplate = async (companyId, templatePath) => {
           const fieldKey = `Father Name C${suffix}`;
           if (!valueMap[fieldKey]) valueMap[fieldKey] = cv.field_value;
           if (!valueMap[`father_name_c${suffix}`]) valueMap[`father_name_c${suffix}`] = cv.field_value;
+        }
+        if (key.includes('father name') && (key.match(/lh\d+/i) || label.match(/lh\d+/i))) {
+          const lhMatch = key.match(/lh(\d+)/i) || label.match(/lh(\d+)/i);
+          if (lhMatch) {
+            const suffix = lhMatch[1];
+            const fieldKey = `Father Name LH${suffix}`;
+            if (!valueMap[fieldKey]) valueMap[fieldKey] = cv.field_value;
+            if (!valueMap[`father_name_lh${suffix}`]) valueMap[`father_name_lh${suffix}`] = cv.field_value;
+          }
         }
         
         // Handle address fields dynamically - CRITICAL FIX: Ensure Address C1 maps to claimant address, not bank address
@@ -1884,9 +1897,40 @@ const mapCompanyValuesToTemplate = async (companyId, templatePath) => {
     // Share certificates SC1–SC19 (SEBI ISR-4 uses SC11–SC13) plus combined lists
     applyShareCertificateMappings(valueMap, templateMappings);
     applyNameAsPerCertFallbacks(valueMap, templateMappings);
-    if (templateMappings['Year of Purchase 1']) {
-      console.log(`✅ Mapped Year of Purchase for SC1: "${templateMappings['Year of Purchase 1']}" (both formats)`);
+    if (!templateMappings['Name as per Cert C1'] || templateMappings['Name as per Cert C1'].startsWith('[')) {
+      templateMappings['Name as per Cert C1'] = templateMappings['Name as per Aadhar C1'] || '';
     }
+    const yopVal = templateMappings['Year of Purchase 1'] || templateMappings['Year of Purchase1'] || valueMap['Year of Purchase 1'] || valueMap['Year of Purchase1'] || valueMap['year_of_purchase_1'] || valueMap['year_of_purchase1'] || '';
+    if (yopVal) {
+      templateMappings['Year of Purchase 1'] = yopVal;
+      templateMappings['Year of Purchase1'] = yopVal;
+      console.log(`✅ Mapped Year of Purchase for SC1: "${yopVal}" (both formats)`);
+    }
+
+    const claimantCity = valueMap['City'] || valueMap['City C1'] || valueMap['city_c1'] || valueMap['city'] || '';
+    templateMappings['City'] = getValueOrPlaceholder(claimantCity, 'City');
+    const claimantState = valueMap['State'] || valueMap['State C1'] || valueMap['state_c1'] || valueMap['state'] || '';
+    templateMappings['State'] = getValueOrPlaceholder(claimantState, 'State');
+
+    const totalSharesVal = templateMappings['Total Shares'] || valueMap['Total Shares'] || valueMap['total_shares'];
+    const totalSharesWordsVal = valueMap['Total Shares in Words'] || valueMap['total_shares_in_words'] || (totalSharesVal ? convertNumberToWords(totalSharesVal) : '');
+    templateMappings['Total Shares in Words'] = getValueOrPlaceholder(totalSharesWordsVal, 'Total Shares in Words');
+
+    templateMappings['Nominee Witness Name'] = getValueOrPlaceholder(
+      valueMap['Nominee Witness Name'] || valueMap['nominee_witness_name'],
+      'Nominee Witness Name'
+    );
+    templateMappings['Nominee Witness Address'] = getValueOrPlaceholder(
+      valueMap['Nominee Witness Address'] || valueMap['nominee_witness_address'],
+      'Nominee Witness Address'
+    );
+    templateMappings['Nominee Witness PIN'] = getValueOrPlaceholder(
+      valueMap['Nominee Witness PIN'] || valueMap['nominee_witness_pin'],
+      'Nominee Witness PIN'
+    );
+
+    templateMappings['For issuance of Duplicate Securities'] = '[For issuance of Duplicate Securities]';
+    templateMappings['For Issuance of Duplicate Securities'] = '[For Issuance of Duplicate Securities]';
 
     const rtaOrCompany = [
       templateMappings['RTA Name'] || resolveRtaName(valueMap),
@@ -2215,6 +2259,13 @@ const generateMappingPreview = (valueMap, templatePath) => {
     'Name as per DC H4': ['name_dc_h4', 'death_certificate_h4', 'deceased_name_4'],
     
     // General fields
+    'Total Shares in Words': ['Total Shares in Words', 'total_shares_in_words'],
+    'City': ['City', 'City C1', 'city_c1', 'city'],
+    'State': ['State', 'State C1', 'state_c1', 'state'],
+    'Year of Purchase 1': ['Year of Purchase 1', 'Year of Purchase1', 'year_of_purchase_1', 'year_of_purchase1'],
+    'Nominee Witness Name': ['Nominee Witness Name', 'nominee_witness_name'],
+    'Nominee Witness Address': ['Nominee Witness Address', 'nominee_witness_address'],
+    'Nominee Witness PIN': ['Nominee Witness PIN', 'nominee_witness_pin'],
     'client_name': ['Client Name', 'client', 'client_name'],
     'case_title': ['Case Title', 'case', 'case_title'],
     'phone': ['Phone', 'phone', 'mobile', 'contact'],
@@ -2377,6 +2428,7 @@ const downloadPopulatedTemplate = async (req, res) => {
             p === 'tick' ||
             p === 'date' ||
             p === 'place' ||
+            p.includes('duplicate securities') ||
             (p.length < 48 &&
               /\b(signature|sign|stamp|photo|thumb|impression|witness)\b/.test(p));
           if (isStatic) {
